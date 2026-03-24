@@ -1,6 +1,7 @@
 package com.danichapps.simpleagent.di
 
 import com.danichapps.simpleagent.BuildConfig
+import com.danichapps.simpleagent.data.remote.OllamaService
 import com.danichapps.simpleagent.data.remote.OpenAiService
 import com.danichapps.simpleagent.data.remote.RagService
 import com.danichapps.simpleagent.data.repository.ChatRepositoryImpl
@@ -47,16 +48,22 @@ val appModule = module {
         HttpClient(OkHttp) {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
             install(Logging) { level = LogLevel.BODY }
+            install(HttpTimeout) {
+                requestTimeoutMillis = OPENAI_TIMEOUT_MS
+                socketTimeoutMillis = OPENAI_TIMEOUT_MS
+                connectTimeoutMillis = OPENAI_TIMEOUT_MS
+            }
         }
     }
 
-    single { OpenAiService(get(named("openai"))) }
+    single<ChatRepository>(named("openai")) { ChatRepositoryImpl(OpenAiService(get(named("openai")))) }
+    single<ChatRepository>(named("ollama")) { ChatRepositoryImpl(OllamaService(get(named("rag")))) }
+
     single { RagService(get(named("rag"))) }
 
-    single<ChatRepository> { ChatRepositoryImpl(get()) }
     single<RagRepository> { RagRepositoryImpl(get()) }
 
-    single { SendMessageUseCase(get(), get()) }
-    single { ExtractTaskStateUseCase(get()) }
-    viewModel { ChatViewModel(get(), get()) }
+    single { SendMessageUseCase(get()) }
+    single { ExtractTaskStateUseCase() }
+    viewModel { ChatViewModel(get(named("openai")), get(named("ollama")), get(), get()) }
 }

@@ -10,7 +10,7 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 
-private const val RAG_BASE_URL = "http://10.0.2.2:8100"
+private const val RAG_BASE_URL = "http://192.168.0.102:8100"
 
 class RagService(private val client: HttpClient) {
 

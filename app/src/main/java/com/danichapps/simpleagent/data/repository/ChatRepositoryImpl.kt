@@ -1,12 +1,12 @@
 package com.danichapps.simpleagent.data.repository
 
-import com.danichapps.simpleagent.data.remote.OpenAiService
+import com.danichapps.simpleagent.data.remote.ChatService
 import com.danichapps.simpleagent.data.remote.dto.MessageDto
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.repository.ChatRepository
 
 class ChatRepositoryImpl(
-    private val service: OpenAiService
+    private val service: ChatService
 ) : ChatRepository {
 
     override suspend fun sendMessages(messages: List<Message>, jsonMode: Boolean): String {

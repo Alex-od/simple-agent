@@ -14,12 +14,12 @@ private fun RagChunk.toSource(): RagSource = RagSource(
 )
 
 class SendMessageUseCase(
-    private val chatRepository: ChatRepository,
     private val ragRepository: RagRepository
 ) {
 
     suspend operator fun invoke(
         messages: List<Message>,
+        chatRepository: ChatRepository,
         ragEnabled: Boolean = false,
         taskState: TaskState = TaskState()
     ): Pair<String, List<RagSource>> {
@@ -38,14 +38,16 @@ class SendMessageUseCase(
         }
 
         val systemContent = buildString {
+            appendLine("Ты полезный ассистент. Всегда отвечай ТОЛЬКО на русском языке, даже если вопрос задан на другом языке.")
             if (!taskState.isEmpty()) {
+                appendLine()
                 appendLine("---ПАМЯТЬ ЗАДАЧИ---")
                 if (taskState.goal.isNotBlank()) appendLine("Цель: ${taskState.goal}")
                 if (taskState.clarifications.isNotEmpty())
                     appendLine("Уточнения: ${taskState.clarifications.joinToString("; ")}")
                 if (taskState.constraints.isNotEmpty())
                     appendLine("Ограничения/Термины: ${taskState.constraints.joinToString("; ")}")
-                appendLine("---КОНЕЦ ПАМЯТИ---\n")
+                appendLine("---КОНЕЦ ПАМЯТИ---")
             }
             if (chunks.isNotEmpty()) {
                 val context = chunks.joinToString("\n\n---\n\n") { it.text }

@@ -67,8 +67,10 @@ fun ChatView(
     isLoading: Boolean,
     error: String?,
     isRagEnabled: Boolean,
+    isOfflineMode: Boolean,
     onSendMessage: (String) -> Unit,
-    onRagToggle: (Boolean) -> Unit
+    onRagToggle: (Boolean) -> Unit,
+    onOfflineModeToggle: (Boolean) -> Unit
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -99,6 +101,17 @@ fun ChatView(
                         )
                     }
                 )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text("Офлайн-режим") },
+                    supportingContent = { Text("Локальная LLM (Ollama)") },
+                    trailingContent = {
+                        Switch(
+                            checked = isOfflineMode,
+                            onCheckedChange = onOfflineModeToggle
+                        )
+                    }
+                )
             }
         }
     ) {
@@ -122,6 +135,18 @@ fun ChatView(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(MaterialTheme.colorScheme.tertiary)
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                            if (isOfflineMode) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "OFFLINE",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondary,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.secondary)
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
                             }

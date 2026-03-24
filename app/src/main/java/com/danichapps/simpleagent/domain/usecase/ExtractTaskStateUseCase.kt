@@ -5,12 +5,11 @@ import com.danichapps.simpleagent.domain.model.TaskState
 import com.danichapps.simpleagent.domain.repository.ChatRepository
 import kotlinx.serialization.json.Json
 
+
 private val json = Json { ignoreUnknownKeys = true }
 
-class ExtractTaskStateUseCase(
-    private val chatRepository: ChatRepository
-) {
-    suspend operator fun invoke(history: List<Message>, current: TaskState): TaskState {
+class ExtractTaskStateUseCase {
+    suspend operator fun invoke(history: List<Message>, current: TaskState, chatRepository: ChatRepository): TaskState {
         val userAndAssistant = history.filter { it.role == "user" || it.role == "assistant" }
         if (userAndAssistant.isEmpty()) return current
 

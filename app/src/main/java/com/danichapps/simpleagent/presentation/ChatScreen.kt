@@ -11,13 +11,16 @@ fun ChatScreen(viewModel: ChatViewModel = koinViewModel()) {
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val isRagEnabled by viewModel.isRagEnabled.collectAsState()
+    val isOfflineMode by viewModel.isOfflineMode.collectAsState()
 
     ChatView(
         messages = messages,
         isLoading = isLoading,
         error = error,
         isRagEnabled = isRagEnabled,
+        isOfflineMode = isOfflineMode,
         onSendMessage = viewModel::sendMessage,
-        onRagToggle = viewModel::toggleRag
+        onRagToggle = viewModel::toggleRag,
+        onOfflineModeToggle = viewModel::toggleOfflineMode
     )
 }
