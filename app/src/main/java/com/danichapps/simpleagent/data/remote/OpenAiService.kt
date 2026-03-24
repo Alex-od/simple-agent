@@ -10,6 +10,8 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 
 private const val BASE_URL = "https://api.openai.com/v1"
 private const val MODEL = "gpt-4o-mini"
@@ -26,5 +28,9 @@ class OpenAiService(private val client: HttpClient) : ChatService {
             ))
         }.body()
         return response.choices.first().message.content
+    }
+
+    override fun sendMessagesStreaming(messages: List<MessageDto>, jsonMode: Boolean): Flow<String> = flow {
+        emit(sendMessages(messages, jsonMode))
     }
 }

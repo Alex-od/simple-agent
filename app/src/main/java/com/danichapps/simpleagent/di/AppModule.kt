@@ -1,7 +1,8 @@
 package com.danichapps.simpleagent.di
 
 import com.danichapps.simpleagent.BuildConfig
-import com.danichapps.simpleagent.data.remote.OllamaService
+import com.danichapps.simpleagent.data.remote.ModelDownloadManager
+import com.danichapps.simpleagent.data.remote.OnDeviceLlmService
 import com.danichapps.simpleagent.data.remote.OpenAiService
 import com.danichapps.simpleagent.data.remote.RagService
 import com.danichapps.simpleagent.data.repository.ChatRepositoryImpl
@@ -21,6 +22,7 @@ import io.ktor.client.plugins.logging.Logging
 import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
+import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.qualifier.named
 import org.koin.dsl.module
@@ -57,7 +59,10 @@ val appModule = module {
     }
 
     single<ChatRepository>(named("openai")) { ChatRepositoryImpl(OpenAiService(get(named("openai")))) }
-    single<ChatRepository>(named("ollama")) { ChatRepositoryImpl(OllamaService(get(named("rag")))) }
+    single<ChatRepository>(named("ondevice")) { ChatRepositoryImpl(get<OnDeviceLlmService>()) }
+
+    single { ModelDownloadManager(androidContext()) }
+    single { OnDeviceLlmService(androidContext(), get<ModelDownloadManager>().modelPath) }
 
     single { RagService(get(named("rag"))) }
 
@@ -65,5 +70,5 @@ val appModule = module {
 
     single { SendMessageUseCase(get()) }
     single { ExtractTaskStateUseCase() }
-    viewModel { ChatViewModel(get(named("openai")), get(named("ollama")), get(), get()) }
+    viewModel { ChatViewModel(get(named("openai")), get(named("ondevice")), get<OnDeviceLlmService>(), get<ModelDownloadManager>(), get(), get()) }
 }

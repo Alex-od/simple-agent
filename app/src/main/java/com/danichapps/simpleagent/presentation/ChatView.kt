@@ -18,12 +18,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -33,6 +35,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -53,9 +56,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import com.danichapps.simpleagent.data.remote.StorageOption
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.RagSource
 import kotlinx.coroutines.launch
@@ -68,12 +71,22 @@ fun ChatView(
     error: String?,
     isRagEnabled: Boolean,
     isOfflineMode: Boolean,
+    modelState: ModelState,
     onSendMessage: (String) -> Unit,
     onRagToggle: (Boolean) -> Unit,
-    onOfflineModeToggle: (Boolean) -> Unit
+    onOfflineModeToggle: (Boolean) -> Unit,
+    onStorageLocationSelected: (String) -> Unit
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    // Диалог выбора хранилища
+    if (modelState is ModelState.AskingStorageLocation) {
+        StorageLocationDialog(
+            options = modelState.options,
+            onSelected = onStorageLocationSelected
+        )
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -104,7 +117,7 @@ fun ChatView(
                 HorizontalDivider()
                 ListItem(
                     headlineContent = { Text("Офлайн-режим") },
-                    supportingContent = { Text("Локальная LLM (Ollama)") },
+                    supportingContent = { Text("Локальная LLM (on-device)") },
                     trailingContent = {
                         Switch(
                             checked = isOfflineMode,
@@ -168,6 +181,42 @@ fun ChatView(
                     isLoading = isLoading,
                     modifier = Modifier.weight(1f)
                 )
+                // Прогресс скачивания модели
+                if (modelState is ModelState.Downloading) {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        Text(
+                            text = "Скачивание модели... ${modelState.downloadedMb} MB / ${modelState.totalMb} MB",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LinearProgressIndicator(
+                            progress = { modelState.progress / 100f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+                // Инициализация модели
+                if (modelState is ModelState.Initializing) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
+                        Text(
+                            text = "Загрузка модели в память...",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                // Ошибка модели
+                if (modelState is ModelState.Error) {
+                    Text(
+                        text = "Ошибка модели: ${modelState.message}",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
                 if (error != null) {
                     SelectionContainer {
                         Text(
@@ -315,6 +364,41 @@ private fun SourceItem(source: RagSource) {
             }
         }
     }
+}
+
+@Composable
+private fun StorageLocationDialog(
+    options: List<StorageOption>,
+    onSelected: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { /* нельзя закрыть без выбора */ },
+        title = { Text("Выберите место хранения модели") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Для офлайн-режима требуется ~800 MB. Выберите хранилище:",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                options.forEach { option ->
+                    TextButton(
+                        onClick = { onSelected(option.path) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(text = option.label, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = "Свободно: ${"%.1f".format(option.freeSpaceGb)} GB",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {}
+    )
 }
 
 @Composable
