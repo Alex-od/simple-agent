@@ -181,11 +181,25 @@ fun ChatView(
                     isLoading = isLoading,
                     modifier = Modifier.weight(1f)
                 )
-                // Прогресс скачивания модели
+                // Прогресс скачивания LLM модели
                 if (modelState is ModelState.Downloading) {
                     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                         Text(
-                            text = "Скачивание модели... ${modelState.downloadedMb} MB / ${modelState.totalMb} MB",
+                            text = "Скачивание LLM модели... ${modelState.downloadedMb} MB / ${modelState.totalMb} MB",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LinearProgressIndicator(
+                            progress = { modelState.progress / 100f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+                // Прогресс скачивания embedding модели
+                if (modelState is ModelState.DownloadingEmbedding) {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        Text(
+                            text = "Скачивание embedding модели... ${modelState.downloadedMb} MB / ${modelState.totalMb} MB",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Spacer(modifier = Modifier.height(4.dp))
@@ -377,7 +391,7 @@ private fun StorageLocationDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Для офлайн-режима требуется ~800 MB. Выберите хранилище:",
+                    text = "Для офлайн-режима требуется ~870 MB (LLM ~800 MB + Embedding ~68 MB). Выберите хранилище:",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 options.forEach { option ->

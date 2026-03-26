@@ -42,6 +42,7 @@ koin-androidx-compose = { group = "io.insert-koin", name = "koin-androidx-compos
 # Kotlinx Serialization
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 mediapipe-tasks-genai = { group = "com.google.mediapipe", name = "tasks-genai", version.ref = "mediapipe" }
+mediapipe-tasks-text = { group = "com.google.mediapipe", name = "tasks-text", version.ref = "mediapipe" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

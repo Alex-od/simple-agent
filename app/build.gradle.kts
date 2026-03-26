@@ -67,8 +67,9 @@ dependencies {
     implementation(libs.koin.androidx.compose)
     // Kotlinx Serialization
     implementation(libs.kotlinx.serialization.json)
-    // MediaPipe LLM Inference
+    // MediaPipe LLM Inference + Text Embedding
     implementation(libs.mediapipe.tasks.genai)
+    implementation(libs.mediapipe.tasks.text)
     // Tests
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

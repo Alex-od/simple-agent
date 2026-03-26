@@ -4,8 +4,12 @@ import com.danichapps.simpleagent.BuildConfig
 import com.danichapps.simpleagent.data.remote.ModelDownloadManager
 import com.danichapps.simpleagent.data.remote.OnDeviceLlmService
 import com.danichapps.simpleagent.data.remote.OpenAiService
+import com.danichapps.simpleagent.data.local.GemmaRerankService
+import com.danichapps.simpleagent.data.local.LocalEmbeddingService
+import com.danichapps.simpleagent.data.local.LocalRagChunksDataSource
 import com.danichapps.simpleagent.data.remote.RagService
 import com.danichapps.simpleagent.data.repository.ChatRepositoryImpl
+import com.danichapps.simpleagent.data.repository.LocalRagRepositoryImpl
 import com.danichapps.simpleagent.data.repository.RagRepositoryImpl
 import com.danichapps.simpleagent.domain.repository.ChatRepository
 import com.danichapps.simpleagent.domain.repository.RagRepository
@@ -66,9 +70,16 @@ val appModule = module {
 
     single { RagService(get(named("rag"))) }
 
-    single<RagRepository> { RagRepositoryImpl(get()) }
+    single { LocalRagChunksDataSource(androidContext()) }
+    single { LocalEmbeddingService(androidContext(), get<ModelDownloadManager>().embeddingModelPath) }
+    single { GemmaRerankService() }
 
-    single { SendMessageUseCase(get()) }
+    single<RagRepository>(named("remote")) { RagRepositoryImpl(get()) }
+    single<RagRepository>(named("local")) { LocalRagRepositoryImpl(get(), get(), androidContext(), get()) }
+
+    single<SendMessageUseCase>(named("online")) { SendMessageUseCase(get(named("remote"))) }
+    single<SendMessageUseCase>(named("offline")) { SendMessageUseCase(get(named("local"))) }
+
     single { ExtractTaskStateUseCase() }
-    viewModel { ChatViewModel(get(named("openai")), get(named("ondevice")), get<OnDeviceLlmService>(), get<ModelDownloadManager>(), get(), get()) }
+    viewModel { ChatViewModel(get(named("openai")), get(named("ondevice")), get<OnDeviceLlmService>(), get<ModelDownloadManager>(), get(named("online")), get(named("offline")), get()) }
 }

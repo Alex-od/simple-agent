@@ -10,8 +10,9 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.toList
 
-private const val MAX_TOKENS = 1024
+private const val MAX_TOKENS = 4096
 
 class OnDeviceLlmService(
     private val context: Context,
@@ -19,6 +20,8 @@ class OnDeviceLlmService(
 ) : ChatService {
 
     private var llmInference: LlmInference? = null
+
+    fun isInitialized(): Boolean = llmInference != null
 
     fun initialize() {
         llmInference = try {
@@ -70,18 +73,11 @@ class OnDeviceLlmService(
     }
 
     override suspend fun sendMessages(messages: List<MessageDto>, jsonMode: Boolean): String {
-        val inference = requireNotNull(llmInference) { "LlmInference not initialized" }
-        val prompt = formatPrompt(messages, jsonMode)
-        return withContext(Dispatchers.IO) {
-            val session = LlmInferenceSession.createFromOptions(
-                inference,
-                LlmInferenceSession.LlmInferenceSessionOptions.builder().build()
-            )
-            session.use {
-                it.addQueryChunk(prompt)
-                it.generateResponse()
-            }
-        }
+        val sb = StringBuilder()
+        withContext(Dispatchers.IO) {
+            sendMessagesStreaming(messages, jsonMode).toList()
+        }.forEach { sb.append(it) }
+        return sb.toString()
     }
 
     override fun sendMessagesStreaming(messages: List<MessageDto>, jsonMode: Boolean): Flow<String> {

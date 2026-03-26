@@ -17,11 +17,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 private const val MAX_HISTORY = 20
+private const val MAX_HISTORY_OFFLINE = 6
 
 sealed class ModelState {
     object NotDownloaded : ModelState()
     data class AskingStorageLocation(val options: List<StorageOption>) : ModelState()
     data class Downloading(val progress: Int, val downloadedMb: Int, val totalMb: Int) : ModelState()
+    data class DownloadingEmbedding(val progress: Int, val downloadedMb: Int, val totalMb: Int) : ModelState()
     object Initializing : ModelState()
     object Ready : ModelState()
     data class Error(val message: String) : ModelState()
@@ -32,7 +34,8 @@ class ChatViewModel(
     private val onDeviceChatRepo: ChatRepository,
     private val onDeviceLlmService: OnDeviceLlmService,
     private val modelDownloadManager: ModelDownloadManager,
-    private val sendMessageUseCase: SendMessageUseCase,
+    private val onlineSendMessageUseCase: SendMessageUseCase,
+    private val offlineSendMessageUseCase: SendMessageUseCase,
     private val extractTaskStateUseCase: ExtractTaskStateUseCase
 ) : ViewModel() {
 
@@ -80,14 +83,21 @@ class ChatViewModel(
     fun onStorageLocationSelected(path: String) {
         viewModelScope.launch {
             modelDownloadManager.selectedStoragePath = path
+
+            // Шаг 1: скачать LLM модель
+            var llmSuccess = false
             modelDownloadManager.downloadModel(path).collect { state ->
                 when (state) {
                     is DownloadState.Downloading -> _modelState.value =
                         ModelState.Downloading(state.progress, state.downloadedMb, state.totalMb)
-                    is DownloadState.Done -> initializeModel()
+                    is DownloadState.Done -> llmSuccess = true
                     is DownloadState.Error -> _modelState.value = ModelState.Error(state.message)
                 }
             }
+            if (!llmSuccess) return@launch
+
+            // Шаг 2: инициализировать LLM (внутри — автоскачивание embedding если нужно)
+            initializeModel()
         }
     }
 
@@ -96,11 +106,34 @@ class ChatViewModel(
             _modelState.value = ModelState.Initializing
             try {
                 onDeviceLlmService.initialize()
-                _modelState.value = ModelState.Ready
             } catch (e: Exception) {
                 _modelState.value = ModelState.Error(e.message ?: "Ошибка инициализации модели")
+                return@launch
+            }
+
+            // Если embedding-модель ещё не скачана — скачиваем автоматически
+            if (!modelDownloadManager.isEmbeddingModelDownloaded()) {
+                downloadEmbeddingModelSilently()
+            } else {
+                _modelState.value = ModelState.Ready
             }
         }
+    }
+
+    private suspend fun downloadEmbeddingModelSilently() {
+        modelDownloadManager.downloadEmbeddingModel(modelDownloadManager.selectedStoragePath)
+            .collect { state ->
+                when (state) {
+                    is DownloadState.Downloading -> _modelState.value =
+                        ModelState.DownloadingEmbedding(state.progress, state.downloadedMb, state.totalMb)
+                    is DownloadState.Done -> _modelState.value = ModelState.Ready
+                    is DownloadState.Error -> {
+                        // Не блокируем LLM при ошибке embedding
+                        _modelState.value = ModelState.Ready
+                        _error.value = "Embedding модель не загружена: ${state.message}. RAG в офлайне недоступен."
+                    }
+                }
+            }
     }
 
     fun sendMessage(text: String) {
@@ -113,7 +146,7 @@ class ChatViewModel(
             _error.value = null
 
             if (_isOfflineMode.value) {
-                sendOfflineStreaming(historyWithUser)
+                sendOffline(historyWithUser)
             } else {
                 sendOnline(historyWithUser)
             }
@@ -122,7 +155,7 @@ class ChatViewModel(
 
     private suspend fun sendOnline(history: List<Message>) {
         try {
-            val (answer, sources) = sendMessageUseCase(
+            val (answer, sources) = onlineSendMessageUseCase(
                 history,
                 chatRepository = openAiChatRepo,
                 ragEnabled = _isRagEnabled.value,
@@ -143,34 +176,25 @@ class ChatViewModel(
         }
     }
 
-    private suspend fun sendOfflineStreaming(history: List<Message>) {
+    private suspend fun sendOffline(history: List<Message>) {
         if (_modelState.value !is ModelState.Ready) {
             _error.value = "Модель не готова. Дождитесь загрузки и инициализации."
             _isLoading.value = false
             return
         }
-        // Добавляем пустое сообщение ассистента, которое будет заполняться токенами
-        val assistantMsg = Message(role = "assistant", content = "")
-        _messages.value = history + assistantMsg
-
         try {
-            val accumulated = StringBuilder()
-            sendMessageUseCase.invokeStreaming(
-                messages = history,
+            val (answer, sources) = offlineSendMessageUseCase(
+                history,
                 chatRepository = onDeviceChatRepo,
+                ragEnabled = _isRagEnabled.value,
                 taskState = _taskState.value
-            ).collect { token ->
-                accumulated.append(token)
-                val updated = (_messages.value.dropLast(1) + assistantMsg.copy(content = accumulated.toString()))
-                    .takeLast(MAX_HISTORY)
-                _messages.value = updated
-            }
-            val finalHistory = _messages.value
-            // ExtractTaskState в фоне — не блокируем UI
-            viewModelScope.launch {
-                try {
-                    _taskState.value = extractTaskStateUseCase(finalHistory, _taskState.value, onDeviceChatRepo)
-                } catch (_: Exception) { }
+            )
+            if (answer.isNotBlank()) {
+                val updatedHistory = (history + Message(role = "assistant", content = answer, sources = sources)).takeLast(MAX_HISTORY_OFFLINE)
+                _messages.value = updatedHistory
+            } else {
+                _error.value = "Модель не дала ответа"
+                _messages.value = history.dropLast(1)
             }
         } catch (e: Exception) {
             _error.value = e.message ?: "Ошибка генерации"
