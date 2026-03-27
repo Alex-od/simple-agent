@@ -1,4 +1,4 @@
-package com.danichapps.simpleagent.presentation
+﻿package com.danichapps.simpleagent.presentation
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -35,7 +34,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -57,8 +55,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.danichapps.simpleagent.data.remote.StorageOption
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.RagSource
 import kotlinx.coroutines.launch
@@ -70,23 +68,19 @@ fun ChatView(
     isLoading: Boolean,
     error: String?,
     isRagEnabled: Boolean,
+    isRagIndexed: Boolean,
+    ragFolderName: String?,
+    modelFileName: String?,
     isOfflineMode: Boolean,
     modelState: ModelState,
     onSendMessage: (String) -> Unit,
     onRagToggle: (Boolean) -> Unit,
     onOfflineModeToggle: (Boolean) -> Unit,
-    onStorageLocationSelected: (String) -> Unit
+    onPickRagFolder: () -> Unit,
+    onPickModelFile: () -> Unit
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-
-    // Диалог выбора хранилища
-    if (modelState is ModelState.AskingStorageLocation) {
-        StorageLocationDialog(
-            options = modelState.options,
-            onSelected = onStorageLocationSelected
-        )
-    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -116,8 +110,28 @@ fun ChatView(
                 )
                 HorizontalDivider()
                 ListItem(
+                    headlineContent = { Text("Папка базы RAG") },
+                    supportingContent = { Text(ragFolderName ?: "Не выбрана") },
+                    trailingContent = {
+                        TextButton(onClick = onPickRagFolder) {
+                            Text("Выбрать")
+                        }
+                    }
+                )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text("Модель GGUF") },
+                    supportingContent = { Text(modelFileName ?: "Не выбрана") },
+                    trailingContent = {
+                        TextButton(onClick = onPickModelFile) {
+                            Text("Выбрать")
+                        }
+                    }
+                )
+                HorizontalDivider()
+                ListItem(
                     headlineContent = { Text("Офлайн-режим") },
-                    supportingContent = { Text("Локальная LLM (on-device)") },
+                    supportingContent = { Text("Локальная LLM на телефоне через llama.cpp") },
                     trailingContent = {
                         Switch(
                             checked = isOfflineMode,
@@ -141,13 +155,14 @@ fun ChatView(
                             Text("AI Agent")
                             if (isRagEnabled) {
                                 Spacer(modifier = Modifier.width(8.dp))
+                                val ragBgColor = if (isRagIndexed) Color(0xFF388E3C) else MaterialTheme.colorScheme.tertiary
                                 Text(
                                     text = "RAG",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onTertiary,
+                                    color = Color.White,
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.tertiary)
+                                        .background(ragBgColor)
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
                             }
@@ -181,35 +196,6 @@ fun ChatView(
                     isLoading = isLoading,
                     modifier = Modifier.weight(1f)
                 )
-                // Прогресс скачивания LLM модели
-                if (modelState is ModelState.Downloading) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                        Text(
-                            text = "Скачивание LLM модели... ${modelState.downloadedMb} MB / ${modelState.totalMb} MB",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        LinearProgressIndicator(
-                            progress = { modelState.progress / 100f },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-                // Прогресс скачивания embedding модели
-                if (modelState is ModelState.DownloadingEmbedding) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                        Text(
-                            text = "Скачивание embedding модели... ${modelState.downloadedMb} MB / ${modelState.totalMb} MB",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        LinearProgressIndicator(
-                            progress = { modelState.progress / 100f },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-                // Инициализация модели
                 if (modelState is ModelState.Initializing) {
                     Row(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -217,19 +203,32 @@ fun ChatView(
                     ) {
                         CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
                         Text(
-                            text = "Загрузка модели в память...",
+                            text = "Инициализация on-device llama.cpp...",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
                 }
-                // Ошибка модели
+                if (modelState is ModelState.Indexing) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
+                        Text(
+                            text = "Построение индекса RAG...",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
                 if (modelState is ModelState.Error) {
-                    Text(
-                        text = "Ошибка модели: ${modelState.message}",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = "Ошибка локальной модели: ${modelState.message}",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                    }
                 }
                 if (error != null) {
                     SelectionContainer {
@@ -322,8 +321,7 @@ private fun SourcesBlock(sources: List<RagSource>) {
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
         ) {
             Icon(
-                imageVector = if (expanded) Icons.Default.KeyboardArrowUp
-                              else Icons.Default.KeyboardArrowDown,
+                imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                 contentDescription = null,
                 modifier = Modifier.padding(end = 4.dp),
                 tint = MaterialTheme.colorScheme.primary
@@ -378,41 +376,6 @@ private fun SourceItem(source: RagSource) {
             }
         }
     }
-}
-
-@Composable
-private fun StorageLocationDialog(
-    options: List<StorageOption>,
-    onSelected: (String) -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = { /* нельзя закрыть без выбора */ },
-        title = { Text("Выберите место хранения модели") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Для офлайн-режима требуется ~870 MB (LLM ~800 MB + Embedding ~68 MB). Выберите хранилище:",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                options.forEach { option ->
-                    TextButton(
-                        onClick = { onSelected(option.path) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(text = option.label, style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                text = "Свободно: ${"%.1f".format(option.freeSpaceGb)} GB",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {}
-    )
 }
 
 @Composable

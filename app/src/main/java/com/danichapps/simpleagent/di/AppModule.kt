@@ -1,12 +1,15 @@
 package com.danichapps.simpleagent.di
 
 import com.danichapps.simpleagent.BuildConfig
-import com.danichapps.simpleagent.data.remote.ModelDownloadManager
-import com.danichapps.simpleagent.data.remote.OnDeviceLlmService
+import com.danichapps.simpleagent.data.local.ModelSelectionManager
+import com.danichapps.simpleagent.data.remote.DeviceModelPathResolver
+import com.danichapps.simpleagent.data.remote.LlamaCppEmbeddingService
+import com.danichapps.simpleagent.data.remote.LlamaCppNative
+import com.danichapps.simpleagent.data.remote.OnDeviceLlamaCppService
 import com.danichapps.simpleagent.data.remote.OpenAiService
 import com.danichapps.simpleagent.data.local.GemmaRerankService
-import com.danichapps.simpleagent.data.local.LocalEmbeddingService
 import com.danichapps.simpleagent.data.local.LocalRagChunksDataSource
+import com.danichapps.simpleagent.data.local.RagFolderPreferences
 import com.danichapps.simpleagent.data.remote.RagService
 import com.danichapps.simpleagent.data.repository.ChatRepositoryImpl
 import com.danichapps.simpleagent.data.repository.LocalRagRepositoryImpl
@@ -14,6 +17,7 @@ import com.danichapps.simpleagent.data.repository.RagRepositoryImpl
 import com.danichapps.simpleagent.domain.repository.ChatRepository
 import com.danichapps.simpleagent.domain.repository.RagRepository
 import com.danichapps.simpleagent.domain.usecase.ExtractTaskStateUseCase
+import com.danichapps.simpleagent.domain.usecase.OfflineSendMessageUseCase
 import com.danichapps.simpleagent.domain.usecase.SendMessageUseCase
 import com.danichapps.simpleagent.presentation.ChatViewModel
 import io.ktor.client.HttpClient
@@ -63,23 +67,25 @@ val appModule = module {
     }
 
     single<ChatRepository>(named("openai")) { ChatRepositoryImpl(OpenAiService(get(named("openai")))) }
-    single<ChatRepository>(named("ondevice")) { ChatRepositoryImpl(get<OnDeviceLlmService>()) }
-
-    single { ModelDownloadManager(androidContext()) }
-    single { OnDeviceLlmService(androidContext(), get<ModelDownloadManager>().modelPath) }
+    single { ModelSelectionManager(androidContext()) }
+    single { DeviceModelPathResolver(androidContext(), get()) }
+    single { LlamaCppNative() }
+    single { OnDeviceLlamaCppService(get(), get()) }
+    single<ChatRepository>(named("ondevice")) { ChatRepositoryImpl(get<OnDeviceLlamaCppService>()) }
 
     single { RagService(get(named("rag"))) }
 
-    single { LocalRagChunksDataSource(androidContext()) }
-    single { LocalEmbeddingService(androidContext(), get<ModelDownloadManager>().embeddingModelPath) }
+    single { RagFolderPreferences(androidContext()) }
+    single { LocalRagChunksDataSource(androidContext(), get()) }
+    single { LlamaCppEmbeddingService(get()) }
     single { GemmaRerankService() }
 
     single<RagRepository>(named("remote")) { RagRepositoryImpl(get()) }
     single<RagRepository>(named("local")) { LocalRagRepositoryImpl(get(), get(), androidContext(), get()) }
 
     single<SendMessageUseCase>(named("online")) { SendMessageUseCase(get(named("remote"))) }
-    single<SendMessageUseCase>(named("offline")) { SendMessageUseCase(get(named("local"))) }
+    single<OfflineSendMessageUseCase> { OfflineSendMessageUseCase(get(named("local"))) }
 
     single { ExtractTaskStateUseCase() }
-    viewModel { ChatViewModel(get(named("openai")), get(named("ondevice")), get<OnDeviceLlmService>(), get<ModelDownloadManager>(), get(named("online")), get(named("offline")), get()) }
+    viewModel { ChatViewModel(get(named("openai")), get(named("ondevice")), get<OnDeviceLlamaCppService>(), get(named("online")), get(), get(), get(named("local")), get(), get()) }
 }

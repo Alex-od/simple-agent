@@ -24,10 +24,16 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "OPENAI_API_KEY", "\"${localProps["OPENAI_API_KEY"]}\"")
+        buildConfigField("String", "ON_DEVICE_LLM_MODEL_FILENAME", "\"${localProps["ON_DEVICE_LLM_MODEL_FILENAME"] ?: "Qwen2.5-3B-Instruct-Q4_K_M.gguf"}\"")
+        buildConfigField("String", "ON_DEVICE_LLM_MODEL_PATH", "\"${localProps["ON_DEVICE_LLM_MODEL_PATH"] ?: ""}\"")
+        buildConfigField("String", "LOCAL_EMBEDDING_MODEL_PATH", "\"${localProps["LOCAL_EMBEDDING_MODEL_PATH"] ?: ""}\"")
     }
 
     buildTypes {
@@ -44,6 +50,11 @@ android {
         compose = true
         buildConfig = true
     }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
 }
 
 dependencies {
@@ -51,6 +62,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.documentfile)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -67,9 +79,6 @@ dependencies {
     implementation(libs.koin.androidx.compose)
     // Kotlinx Serialization
     implementation(libs.kotlinx.serialization.json)
-    // MediaPipe LLM Inference + Text Embedding
-    implementation(libs.mediapipe.tasks.genai)
-    implementation(libs.mediapipe.tasks.text)
     // Tests
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -1,15 +1,17 @@
-package com.danichapps.simpleagent.presentation
+﻿package com.danichapps.simpleagent.presentation
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.danichapps.simpleagent.data.remote.DownloadState
-import com.danichapps.simpleagent.data.remote.ModelDownloadManager
-import com.danichapps.simpleagent.data.remote.OnDeviceLlmService
-import com.danichapps.simpleagent.data.remote.StorageOption
+import com.danichapps.simpleagent.data.local.ModelSelectionManager
+import com.danichapps.simpleagent.data.local.RagFolderPreferences
+import com.danichapps.simpleagent.data.remote.OnDeviceLlamaCppService
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.TaskState
 import com.danichapps.simpleagent.domain.repository.ChatRepository
+import com.danichapps.simpleagent.domain.repository.RagRepository
 import com.danichapps.simpleagent.domain.usecase.ExtractTaskStateUseCase
+import com.danichapps.simpleagent.domain.usecase.OfflineSendMessageUseCase
 import com.danichapps.simpleagent.domain.usecase.SendMessageUseCase
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,11 +22,9 @@ private const val MAX_HISTORY = 20
 private const val MAX_HISTORY_OFFLINE = 6
 
 sealed class ModelState {
-    object NotDownloaded : ModelState()
-    data class AskingStorageLocation(val options: List<StorageOption>) : ModelState()
-    data class Downloading(val progress: Int, val downloadedMb: Int, val totalMb: Int) : ModelState()
-    data class DownloadingEmbedding(val progress: Int, val downloadedMb: Int, val totalMb: Int) : ModelState()
+    object NotReady : ModelState()
     object Initializing : ModelState()
+    object Indexing : ModelState()
     object Ready : ModelState()
     data class Error(val message: String) : ModelState()
 }
@@ -32,11 +32,13 @@ sealed class ModelState {
 class ChatViewModel(
     private val openAiChatRepo: ChatRepository,
     private val onDeviceChatRepo: ChatRepository,
-    private val onDeviceLlmService: OnDeviceLlmService,
-    private val modelDownloadManager: ModelDownloadManager,
+    private val onDeviceLlamaCppService: OnDeviceLlamaCppService,
     private val onlineSendMessageUseCase: SendMessageUseCase,
-    private val offlineSendMessageUseCase: SendMessageUseCase,
-    private val extractTaskStateUseCase: ExtractTaskStateUseCase
+    private val offlineSendMessageUseCase: OfflineSendMessageUseCase,
+    private val extractTaskStateUseCase: ExtractTaskStateUseCase,
+    private val localRagRepository: RagRepository,
+    private val ragFolderPreferences: RagFolderPreferences,
+    private val modelSelectionManager: ModelSelectionManager
 ) : ViewModel() {
 
     private val _taskState = MutableStateFlow(TaskState())
@@ -53,50 +55,56 @@ class ChatViewModel(
     private val _isRagEnabled = MutableStateFlow(false)
     val isRagEnabled: StateFlow<Boolean> = _isRagEnabled.asStateFlow()
 
+    private val _isRagIndexed = MutableStateFlow(localRagRepository.isIndexed())
+    val isRagIndexed: StateFlow<Boolean> = _isRagIndexed.asStateFlow()
+
+    private val _ragFolderName = MutableStateFlow(ragFolderPreferences.getDisplayName())
+    val ragFolderName: StateFlow<String?> = _ragFolderName.asStateFlow()
+
+    private val _modelFileName = MutableStateFlow(modelSelectionManager.getSelectedModelDisplayName())
+    val modelFileName: StateFlow<String?> = _modelFileName.asStateFlow()
+
     private val _isOfflineMode = MutableStateFlow(false)
     val isOfflineMode: StateFlow<Boolean> = _isOfflineMode.asStateFlow()
 
-    private val _modelState = MutableStateFlow<ModelState>(
-        if (modelDownloadManager.isModelDownloaded()) ModelState.NotDownloaded
-        else ModelState.NotDownloaded
-    )
+    private val _modelState = MutableStateFlow<ModelState>(ModelState.NotReady)
     val modelState: StateFlow<ModelState> = _modelState.asStateFlow()
-
-    init {
-        // Если модель уже скачана — сразу инициализируем
-        if (modelDownloadManager.isModelDownloaded()) {
-            initializeModel()
-        }
-    }
 
     fun toggleRag(enabled: Boolean) {
         _isRagEnabled.value = enabled
     }
 
-    fun toggleOfflineMode(enabled: Boolean) {
-        _isOfflineMode.value = enabled
-        if (enabled && _modelState.value is ModelState.NotDownloaded) {
-            _modelState.value = ModelState.AskingStorageLocation(modelDownloadManager.getStorageOptions())
+    fun setRagFolder(uri: Uri, displayName: String?) {
+        ragFolderPreferences.save(uri, displayName)
+        _ragFolderName.value = displayName
+        _isRagIndexed.value = localRagRepository.isIndexed()
+        if (_isOfflineMode.value) {
+            initializeModel()
         }
     }
 
-    fun onStorageLocationSelected(path: String) {
+    fun importModel(uri: Uri, displayName: String?) {
         viewModelScope.launch {
-            modelDownloadManager.selectedStoragePath = path
-
-            // Шаг 1: скачать LLM модель
-            var llmSuccess = false
-            modelDownloadManager.downloadModel(path).collect { state ->
-                when (state) {
-                    is DownloadState.Downloading -> _modelState.value =
-                        ModelState.Downloading(state.progress, state.downloadedMb, state.totalMb)
-                    is DownloadState.Done -> llmSuccess = true
-                    is DownloadState.Error -> _modelState.value = ModelState.Error(state.message)
+            try {
+                _modelState.value = ModelState.Initializing
+                onDeviceLlamaCppService.release()
+                val importedFile = modelSelectionManager.importModel(uri, displayName)
+                _modelFileName.value = displayName ?: importedFile.name
+                if (_isOfflineMode.value) {
+                    initializeModel()
+                } else {
+                    _modelState.value = ModelState.NotReady
+                    _error.value = "Модель выбрана: ${importedFile.name}"
                 }
+            } catch (e: Exception) {
+                _modelState.value = ModelState.Error(e.message ?: "Не удалось импортировать модель")
             }
-            if (!llmSuccess) return@launch
+        }
+    }
 
-            // Шаг 2: инициализировать LLM (внутри — автоскачивание embedding если нужно)
+    fun toggleOfflineMode(enabled: Boolean) {
+        _isOfflineMode.value = enabled
+        if (enabled && _modelState.value !is ModelState.Ready && _modelState.value !is ModelState.Initializing && _modelState.value !is ModelState.Indexing) {
             initializeModel()
         }
     }
@@ -105,39 +113,27 @@ class ChatViewModel(
         viewModelScope.launch {
             _modelState.value = ModelState.Initializing
             try {
-                onDeviceLlmService.initialize()
-            } catch (e: Exception) {
-                _modelState.value = ModelState.Error(e.message ?: "Ошибка инициализации модели")
-                return@launch
-            }
-
-            // Если embedding-модель ещё не скачана — скачиваем автоматически
-            if (!modelDownloadManager.isEmbeddingModelDownloaded()) {
-                downloadEmbeddingModelSilently()
-            } else {
+                onDeviceLlamaCppService.initialize()
+                if (ragFolderPreferences.hasFolder() && !localRagRepository.isIndexed()) {
+                    _modelState.value = ModelState.Indexing
+                    localRagRepository.buildIndexIfNeeded()
+                    _isRagIndexed.value = localRagRepository.isIndexed()
+                }
                 _modelState.value = ModelState.Ready
+            } catch (e: Exception) {
+                _modelState.value = ModelState.Error(
+                    e.message ?: "Не удалось инициализировать on-device llama.cpp"
+                )
             }
         }
     }
 
-    private suspend fun downloadEmbeddingModelSilently() {
-        modelDownloadManager.downloadEmbeddingModel(modelDownloadManager.selectedStoragePath)
-            .collect { state ->
-                when (state) {
-                    is DownloadState.Downloading -> _modelState.value =
-                        ModelState.DownloadingEmbedding(state.progress, state.downloadedMb, state.totalMb)
-                    is DownloadState.Done -> _modelState.value = ModelState.Ready
-                    is DownloadState.Error -> {
-                        // Не блокируем LLM при ошибке embedding
-                        _modelState.value = ModelState.Ready
-                        _error.value = "Embedding модель не загружена: ${state.message}. RAG в офлайне недоступен."
-                    }
-                }
-            }
-    }
-
     fun sendMessage(text: String) {
         if (text.isBlank() || _isLoading.value) return
+        if (_isRagEnabled.value && !ragFolderPreferences.hasFolder()) {
+            _error.value = "Выберите папку базы RAG перед поиском по документам."
+            return
+        }
         viewModelScope.launch {
             val userMsg = Message(role = "user", content = text)
             val historyWithUser = (_messages.value + userMsg).takeLast(MAX_HISTORY)
@@ -167,7 +163,8 @@ class ChatViewModel(
             viewModelScope.launch {
                 try {
                     _taskState.value = extractTaskStateUseCase(updatedHistory, _taskState.value, openAiChatRepo)
-                } catch (_: Exception) { }
+                } catch (_: Exception) {
+                }
             }
         } catch (e: Exception) {
             _error.value = e.message ?: "Ошибка соединения"
@@ -178,7 +175,7 @@ class ChatViewModel(
 
     private suspend fun sendOffline(history: List<Message>) {
         if (_modelState.value !is ModelState.Ready) {
-            _error.value = "Модель не готова. Дождитесь загрузки и инициализации."
+            _error.value = "Локальная модель не готова. Убедитесь, что GGUF лежит на телефоне и native llama.cpp подключён."
             _isLoading.value = false
             return
         }
@@ -190,14 +187,15 @@ class ChatViewModel(
                 taskState = _taskState.value
             )
             if (answer.isNotBlank()) {
-                val updatedHistory = (history + Message(role = "assistant", content = answer, sources = sources)).takeLast(MAX_HISTORY_OFFLINE)
+                val updatedHistory = (history + Message(role = "assistant", content = answer, sources = sources))
+                    .takeLast(MAX_HISTORY_OFFLINE)
                 _messages.value = updatedHistory
             } else {
-                _error.value = "Модель не дала ответа"
+                _error.value = "Локальная модель не вернула ответ"
                 _messages.value = history.dropLast(1)
             }
         } catch (e: Exception) {
-            _error.value = e.message ?: "Ошибка генерации"
+            _error.value = e.message ?: "Ошибка локальной генерации"
         } finally {
             _isLoading.value = false
         }
@@ -205,6 +203,6 @@ class ChatViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        onDeviceLlmService.release()
+        onDeviceLlamaCppService.release()
     }
 }

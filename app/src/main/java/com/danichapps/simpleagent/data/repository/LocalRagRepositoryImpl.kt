@@ -3,8 +3,8 @@ package com.danichapps.simpleagent.data.repository
 import android.content.Context
 import com.danichapps.simpleagent.data.local.BM25Scorer
 import com.danichapps.simpleagent.data.local.GemmaRerankService
-import com.danichapps.simpleagent.data.local.LocalEmbeddingService
 import com.danichapps.simpleagent.data.local.LocalRagChunksDataSource
+import com.danichapps.simpleagent.data.remote.LlamaCppEmbeddingService
 import com.danichapps.simpleagent.data.local.ScoredChunk
 import com.danichapps.simpleagent.domain.model.RagChunk
 import com.danichapps.simpleagent.domain.repository.RagRepository
@@ -15,11 +15,11 @@ import java.io.DataOutputStream
 import java.io.File
 import kotlin.math.sqrt
 
-private const val EMBEDDINGS_CACHE_FILENAME = "rag_embeddings.bin"
+private const val EMBEDDINGS_CACHE_FILENAME = "rag_embeddings_llama.bin"
 
 class LocalRagRepositoryImpl(
     private val chunksDataSource: LocalRagChunksDataSource,
-    private val embeddingService: LocalEmbeddingService,
+    private val embeddingService: LlamaCppEmbeddingService,
     private val context: Context,
     private val rerankService: GemmaRerankService
 ) : RagRepository {
@@ -27,20 +27,43 @@ class LocalRagRepositoryImpl(
     private var cachedEmbeddings: List<Pair<RagChunk, FloatArray>>? = null
     private var bm25Scorer: BM25Scorer? = null
 
+    override fun isIndexed(): Boolean = chunksDataSource.hasCachedIndex()
+
+    override suspend fun buildIndexIfNeeded() {
+        val chunks = chunksDataSource.getChunks()
+        if (chunks.isEmpty()) return
+        if (!embeddingService.isAvailable()) return
+        val cached = loadEmbeddingsFromDisk()
+        if (cached != null && cached.size == chunks.size && cached.map { it.first } == chunks) {
+            cachedEmbeddings = cached
+            return
+        }
+        computeAndCacheEmbeddings(chunks)
+    }
+
     override suspend fun searchContext(query: String, topK: Int): List<RagChunk> {
-        if (!embeddingService.isModelAvailable()) return emptyList()
+        val chunks = chunksDataSource.getChunks()
+        if (chunks.isEmpty()) return emptyList()
 
-        val embeddings = getOrComputeEmbeddings() ?: return emptyList()
-        val queryEmbedding = embeddingService.embed(query) ?: return emptyList()
-
-        val bm25 = bm25Scorer ?: BM25Scorer(embeddings.map { it.first.text }).also { bm25Scorer = it }
-        val bm25Scores = embeddings.indices.map { i -> bm25.score(query, i) }
+        val bm25 = bm25Scorer ?: BM25Scorer(chunks.map { it.text }).also { bm25Scorer = it }
+        val bm25Scores = chunks.indices.map { i -> bm25.score(query, i) }
         val maxBm25 = bm25Scores.maxOrNull()?.takeIf { it > 0f } ?: 1f
+        val embeddings = getOrComputeEmbeddings()
+        val queryEmbedding = if (embeddingService.isAvailable()) embeddingService.embed(query) else null
 
-        val scored = embeddings.mapIndexed { i, (chunk, embedding) ->
-            val cosine = cosineSimilarity(queryEmbedding, embedding)
+        val scored = chunks.mapIndexed { i, chunk ->
             val bm25Norm = bm25Scores[i] / maxBm25
-            ScoredChunk(chunk, cosine * 0.6f + bm25Norm * 0.4f)
+            val cosine = if (queryEmbedding != null && embeddings != null) {
+                cosineSimilarity(queryEmbedding, embeddings[i].second)
+            } else {
+                0f
+            }
+            val score = if (queryEmbedding != null && embeddings != null) {
+                cosine * 0.6f + bm25Norm * 0.4f
+            } else {
+                bm25Norm
+            }
+            ScoredChunk(chunk, score)
         }
 
         return rerankService.rerank(query, scored)
@@ -55,14 +78,13 @@ class LocalRagRepositoryImpl(
             return diskCache
         }
 
-        return computeAndCacheEmbeddings()
+        val chunks = chunksDataSource.getChunks()
+        if (chunks.isEmpty()) return null
+        return computeAndCacheEmbeddings(chunks)
     }
 
-    private suspend fun computeAndCacheEmbeddings(): List<Pair<RagChunk, FloatArray>>? =
+    private suspend fun computeAndCacheEmbeddings(chunks: List<RagChunk>): List<Pair<RagChunk, FloatArray>>? =
         withContext(Dispatchers.IO) {
-            val chunks = chunksDataSource.getChunks()
-            if (chunks.isEmpty()) return@withContext null
-
             val result = chunks.mapNotNull { chunk ->
                 val embedding = embeddingService.embed(chunk.text) ?: return@mapNotNull null
                 chunk to embedding
