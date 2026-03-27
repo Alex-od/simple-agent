@@ -1,8 +1,11 @@
 package com.danichapps.simpleagent.di
 
 import com.danichapps.simpleagent.BuildConfig
+import com.danichapps.simpleagent.data.local.ChatTuningSettingsStore
+import com.danichapps.simpleagent.data.local.EmbeddingModelSelectionManager
 import com.danichapps.simpleagent.data.local.ModelSelectionManager
 import com.danichapps.simpleagent.data.remote.DeviceModelPathResolver
+import com.danichapps.simpleagent.data.remote.EmbeddingModelPathResolver
 import com.danichapps.simpleagent.data.remote.LlamaCppEmbeddingService
 import com.danichapps.simpleagent.data.remote.LlamaCppNative
 import com.danichapps.simpleagent.data.remote.OnDeviceLlamaCppService
@@ -68,7 +71,9 @@ val appModule = module {
 
     single<ChatRepository>(named("openai")) { ChatRepositoryImpl(OpenAiService(get(named("openai")))) }
     single { ModelSelectionManager(androidContext()) }
+    single { EmbeddingModelSelectionManager(androidContext()) }
     single { DeviceModelPathResolver(androidContext(), get()) }
+    single { EmbeddingModelPathResolver(androidContext(), get()) }
     single { LlamaCppNative() }
     single { OnDeviceLlamaCppService(get(), get()) }
     single<ChatRepository>(named("ondevice")) { ChatRepositoryImpl(get<OnDeviceLlamaCppService>()) }
@@ -76,8 +81,9 @@ val appModule = module {
     single { RagService(get(named("rag"))) }
 
     single { RagFolderPreferences(androidContext()) }
+    single { ChatTuningSettingsStore(androidContext()) }
     single { LocalRagChunksDataSource(androidContext(), get()) }
-    single { LlamaCppEmbeddingService(get()) }
+    single { LlamaCppEmbeddingService(get(), get()) }
     single { GemmaRerankService() }
 
     single<RagRepository>(named("remote")) { RagRepositoryImpl(get()) }
@@ -87,5 +93,20 @@ val appModule = module {
     single<OfflineSendMessageUseCase> { OfflineSendMessageUseCase(get(named("local"))) }
 
     single { ExtractTaskStateUseCase() }
-    viewModel { ChatViewModel(get(named("openai")), get(named("ondevice")), get<OnDeviceLlamaCppService>(), get(named("online")), get(), get(), get(named("local")), get(), get()) }
+    viewModel {
+        ChatViewModel(
+            get(named("openai")),
+            get(named("ondevice")),
+            get<OnDeviceLlamaCppService>(),
+            get<LlamaCppEmbeddingService>(),
+            get(named("online")),
+            get(),
+            get(),
+            get(named("local")),
+            get(),
+            get(),
+            get(),
+            get()
+        )
+    }
 }

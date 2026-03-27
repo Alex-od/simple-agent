@@ -1,5 +1,7 @@
 package com.danichapps.simpleagent.domain.usecase
 
+import android.util.Log
+import com.danichapps.simpleagent.domain.model.ChatTuningSettings
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.RagChunk
 import com.danichapps.simpleagent.domain.model.RagSource
@@ -9,6 +11,7 @@ import com.danichapps.simpleagent.domain.repository.RagRepository
 
 private const val MAX_RAG_CHUNKS_IN_OFFLINE_PROMPT = 1
 private const val MAX_RAG_CHARS_PER_OFFLINE_CHUNK = 450
+private const val TAG = "OfflineSendMessage"
 
 private fun RagChunk.toOfflineSource(): RagSource = RagSource(
     source = source,
@@ -23,7 +26,8 @@ class OfflineSendMessageUseCase(
         messages: List<Message>,
         chatRepository: ChatRepository,
         ragEnabled: Boolean = false,
-        taskState: TaskState = TaskState()
+        taskState: TaskState = TaskState(),
+        settings: ChatTuningSettings = ChatTuningSettings()
     ): Pair<String, List<RagSource>> {
         val chunks = if (ragEnabled && messages.isNotEmpty()) {
             val lastUserQuery = messages.last { it.role == "user" }.content
@@ -40,6 +44,9 @@ class OfflineSendMessageUseCase(
         }
 
         val systemContent = buildString {
+            if (settings.systemPrompt.isNotBlank()) {
+                appendLine(settings.systemPrompt.trim())
+            }
             appendLine("Отвечай только на русском языке.")
             if (chunks.isNotEmpty()) {
                 val context = chunks
@@ -76,8 +83,20 @@ class OfflineSendMessageUseCase(
             messages
         }
 
-        val answer = chatRepository.sendMessages(enrichedMessages)
+        val queryText = messages.lastOrNull { it.role == "user" }?.content.orEmpty()
+        chunks.firstOrNull()?.let { topChunk ->
+            Log.i(
+                TAG,
+                "invoke: query=\"$queryText\" promptChunk=${topChunk.chunkIndex} source=${topChunk.source} promptPreview=\"${topChunk.text.replace("\n", " ").take(MAX_RAG_CHARS_PER_OFFLINE_CHUNK)}\""
+            )
+        } ?: Log.i(TAG, "invoke: query=\"$queryText\" promptChunk=none")
+
+        val answer = chatRepository.sendMessages(enrichedMessages, settings = settings)
         val sources = chunks.map { it.toOfflineSource() }
+        Log.i(
+            TAG,
+            "invoke: answerPreview=\"${answer.replace("\n", " ").take(180)}\" sources=${sources.joinToString { "${it.source}#${it.chunkIndex}" }}"
+        )
         return Pair(answer, sources)
     }
 }

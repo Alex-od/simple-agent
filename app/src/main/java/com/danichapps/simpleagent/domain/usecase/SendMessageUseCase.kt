@@ -1,5 +1,6 @@
 package com.danichapps.simpleagent.domain.usecase
 
+import com.danichapps.simpleagent.domain.model.ChatTuningSettings
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.RagChunk
 import com.danichapps.simpleagent.domain.model.RagSource
@@ -24,7 +25,8 @@ class SendMessageUseCase(
         messages: List<Message>,
         chatRepository: ChatRepository,
         ragEnabled: Boolean = false,
-        taskState: TaskState = TaskState()
+        taskState: TaskState = TaskState(),
+        settings: ChatTuningSettings = ChatTuningSettings()
     ): Pair<String, List<RagSource>> {
         val chunks = if (ragEnabled && messages.isNotEmpty()) {
             val lastUserQuery = messages.last { it.role == "user" }.content
@@ -41,6 +43,9 @@ class SendMessageUseCase(
         }
 
         val systemContent = buildString {
+            if (settings.systemPrompt.isNotBlank()) {
+                appendLine(settings.systemPrompt.trim())
+            }
             appendLine("Ты полезный ассистент. Всегда отвечай ТОЛЬКО на русском языке, даже если вопрос задан на другом языке.")
             if (!taskState.isEmpty()) {
                 appendLine()
@@ -67,7 +72,7 @@ class SendMessageUseCase(
             messages
         }
 
-        val answer = chatRepository.sendMessages(enrichedMessages)
+        val answer = chatRepository.sendMessages(enrichedMessages, settings = settings)
         val sources = chunks.map { it.toSource() }
         return Pair(answer, sources)
     }
@@ -76,17 +81,21 @@ class SendMessageUseCase(
         messages: List<Message>,
         chatRepository: ChatRepository,
         ragEnabled: Boolean = false,
-        taskState: TaskState = TaskState()
+        taskState: TaskState = TaskState(),
+        settings: ChatTuningSettings = ChatTuningSettings()
     ): Flow<String> {
         // RAG требует suspend для поиска контекста — используем suspend invoke() и эмитим одним событием
         if (ragEnabled) {
             return flow {
-                val (answer, _) = invoke(messages, chatRepository, ragEnabled, taskState)
+                val (answer, _) = invoke(messages, chatRepository, ragEnabled, taskState, settings)
                 emit(answer)
             }
         }
 
         val systemContent = buildString {
+            if (settings.systemPrompt.isNotBlank()) {
+                appendLine(settings.systemPrompt.trim())
+            }
             appendLine("Ты полезный ассистент. Всегда отвечай ТОЛЬКО на русском языке, даже если вопрос задан на другом языке.")
             if (!taskState.isEmpty()) {
                 appendLine()
@@ -106,6 +115,6 @@ class SendMessageUseCase(
             messages
         }
 
-        return chatRepository.sendMessagesStreaming(enrichedMessages)
+        return chatRepository.sendMessagesStreaming(enrichedMessages, settings = settings)
     }
 }

@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -40,6 +41,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -56,7 +58,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.danichapps.simpleagent.domain.model.ChatTuningSettings
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.RagSource
 import kotlinx.coroutines.launch
@@ -71,13 +75,19 @@ fun ChatView(
     isRagIndexed: Boolean,
     ragFolderName: String?,
     modelFileName: String?,
+    embeddingModelFileName: String?,
     isOfflineMode: Boolean,
     modelState: ModelState,
+    chatTuningSettings: ChatTuningSettings,
     onSendMessage: (String) -> Unit,
     onRagToggle: (Boolean) -> Unit,
     onOfflineModeToggle: (Boolean) -> Unit,
+    onTemperatureChange: (Float) -> Unit,
+    onMaxTokensChange: (String) -> Unit,
+    onSystemPromptChange: (String) -> Unit,
     onPickRagFolder: () -> Unit,
-    onPickModelFile: () -> Unit
+    onPickModelFile: () -> Unit,
+    onPickEmbeddingModelFile: () -> Unit
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -130,6 +140,16 @@ fun ChatView(
                 )
                 HorizontalDivider()
                 ListItem(
+                    headlineContent = { Text("Embedding GGUF") },
+                    supportingContent = { Text(embeddingModelFileName ?: "Не выбрана") },
+                    trailingContent = {
+                        TextButton(onClick = onPickEmbeddingModelFile) {
+                            Text("Выбрать")
+                        }
+                    }
+                )
+                HorizontalDivider()
+                ListItem(
                     headlineContent = { Text("Офлайн-режим") },
                     supportingContent = { Text("Локальная LLM на телефоне через llama.cpp") },
                     trailingContent = {
@@ -139,6 +159,40 @@ fun ChatView(
                         )
                     }
                 )
+                HorizontalDivider()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    Text(
+                        text = "Temperature: ${"%.2f".format(chatTuningSettings.temperature)}",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Slider(
+                        value = chatTuningSettings.temperature,
+                        onValueChange = onTemperatureChange,
+                        valueRange = 0f..2f
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = chatTuningSettings.maxTokens.toString(),
+                        onValueChange = onMaxTokensChange,
+                        label = { Text("Max tokens") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = chatTuningSettings.systemPrompt,
+                        onValueChange = onSystemPromptChange,
+                        label = { Text("System prompt") },
+                        minLines = 4,
+                        maxLines = 8,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     ) {

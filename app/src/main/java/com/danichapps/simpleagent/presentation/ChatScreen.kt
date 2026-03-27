@@ -20,8 +20,10 @@ fun ChatScreen(viewModel: ChatViewModel = koinViewModel()) {
     val isRagIndexed by viewModel.isRagIndexed.collectAsState()
     val ragFolderName by viewModel.ragFolderName.collectAsState()
     val modelFileName by viewModel.modelFileName.collectAsState()
+    val embeddingModelFileName by viewModel.embeddingModelFileName.collectAsState()
     val isOfflineMode by viewModel.isOfflineMode.collectAsState()
     val modelState by viewModel.modelState.collectAsState()
+    val chatTuningSettings by viewModel.chatTuningSettings.collectAsState()
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             context.contentResolver.takePersistableUriPermission(
@@ -42,6 +44,16 @@ fun ChatScreen(viewModel: ChatViewModel = koinViewModel()) {
             viewModel.importModel(uri, displayName)
         }
     }
+    val embeddingModelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            val displayName = DocumentFile.fromSingleUri(context, uri)?.name
+            viewModel.importEmbeddingModel(uri, displayName)
+        }
+    }
 
     ChatView(
         messages = messages,
@@ -51,12 +63,18 @@ fun ChatScreen(viewModel: ChatViewModel = koinViewModel()) {
         isRagIndexed = isRagIndexed,
         ragFolderName = ragFolderName,
         modelFileName = modelFileName,
+        embeddingModelFileName = embeddingModelFileName,
         isOfflineMode = isOfflineMode,
         modelState = modelState,
+        chatTuningSettings = chatTuningSettings,
         onSendMessage = viewModel::sendMessage,
         onRagToggle = viewModel::toggleRag,
         onOfflineModeToggle = viewModel::toggleOfflineMode,
+        onTemperatureChange = viewModel::updateTemperature,
+        onMaxTokensChange = viewModel::updateMaxTokens,
+        onSystemPromptChange = viewModel::updateSystemPrompt,
         onPickRagFolder = { folderPicker.launch(null) },
-        onPickModelFile = { modelPicker.launch(arrayOf("*/*")) }
+        onPickModelFile = { modelPicker.launch(arrayOf("*/*")) },
+        onPickEmbeddingModelFile = { embeddingModelPicker.launch(arrayOf("*/*")) }
     )
 }

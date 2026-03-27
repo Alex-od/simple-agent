@@ -7,6 +7,9 @@ import kotlinx.serialization.Serializable
 data class ChatRequest(
     val model: String,
     val messages: List<MessageDto>,
+    val temperature: Float? = null,
+    @SerialName("max_tokens")
+    val maxTokens: Int? = null,
     @SerialName("response_format")
     val responseFormat: ResponseFormat? = null
 )

@@ -5,6 +5,7 @@ import com.danichapps.simpleagent.data.remote.dto.ChatResponse
 import com.danichapps.simpleagent.data.remote.dto.MessageDto
 import com.danichapps.simpleagent.data.remote.dto.ModelsResponse
 import com.danichapps.simpleagent.data.remote.dto.ResponseFormat
+import com.danichapps.simpleagent.domain.model.ChatTuningSettings
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
@@ -37,13 +38,19 @@ class LlamaCppService(
 
     fun release() = Unit
 
-    override suspend fun sendMessages(messages: List<MessageDto>, jsonMode: Boolean): String {
+    override suspend fun sendMessages(
+        messages: List<MessageDto>,
+        jsonMode: Boolean,
+        settings: ChatTuningSettings
+    ): String {
         val response: ChatResponse = client.post("$baseUrl/v1/chat/completions") {
             contentType(ContentType.Application.Json)
             setBody(
                 ChatRequest(
                     model = model,
                     messages = messages,
+                    temperature = settings.temperature,
+                    maxTokens = settings.maxTokens,
                     responseFormat = if (jsonMode) ResponseFormat("json_object") else null
                 )
             )
@@ -51,7 +58,11 @@ class LlamaCppService(
         return response.choices.firstOrNull()?.message?.content.orEmpty()
     }
 
-    override fun sendMessagesStreaming(messages: List<MessageDto>, jsonMode: Boolean): Flow<String> = flow {
-        emit(sendMessages(messages, jsonMode))
+    override fun sendMessagesStreaming(
+        messages: List<MessageDto>,
+        jsonMode: Boolean,
+        settings: ChatTuningSettings
+    ): Flow<String> = flow {
+        emit(sendMessages(messages, jsonMode, settings))
     }
 }

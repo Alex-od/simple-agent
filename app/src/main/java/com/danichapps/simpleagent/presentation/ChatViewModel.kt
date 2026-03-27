@@ -5,7 +5,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.danichapps.simpleagent.data.local.ModelSelectionManager
 import com.danichapps.simpleagent.data.local.RagFolderPreferences
+import com.danichapps.simpleagent.data.local.EmbeddingModelSelectionManager
+import com.danichapps.simpleagent.data.local.ChatTuningSettingsStore
+import com.danichapps.simpleagent.data.remote.LlamaCppEmbeddingService
 import com.danichapps.simpleagent.data.remote.OnDeviceLlamaCppService
+import com.danichapps.simpleagent.domain.model.ChatTuningSettings
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.TaskState
 import com.danichapps.simpleagent.domain.repository.ChatRepository
@@ -33,12 +37,15 @@ class ChatViewModel(
     private val openAiChatRepo: ChatRepository,
     private val onDeviceChatRepo: ChatRepository,
     private val onDeviceLlamaCppService: OnDeviceLlamaCppService,
+    private val llamaCppEmbeddingService: LlamaCppEmbeddingService,
     private val onlineSendMessageUseCase: SendMessageUseCase,
     private val offlineSendMessageUseCase: OfflineSendMessageUseCase,
     private val extractTaskStateUseCase: ExtractTaskStateUseCase,
     private val localRagRepository: RagRepository,
     private val ragFolderPreferences: RagFolderPreferences,
-    private val modelSelectionManager: ModelSelectionManager
+    private val modelSelectionManager: ModelSelectionManager,
+    private val embeddingModelSelectionManager: EmbeddingModelSelectionManager,
+    private val chatTuningSettingsStore: ChatTuningSettingsStore
 ) : ViewModel() {
 
     private val _taskState = MutableStateFlow(TaskState())
@@ -64,11 +71,36 @@ class ChatViewModel(
     private val _modelFileName = MutableStateFlow(modelSelectionManager.getSelectedModelDisplayName())
     val modelFileName: StateFlow<String?> = _modelFileName.asStateFlow()
 
+    private val _embeddingModelFileName = MutableStateFlow(embeddingModelSelectionManager.getSelectedModelDisplayName())
+    val embeddingModelFileName: StateFlow<String?> = _embeddingModelFileName.asStateFlow()
+
     private val _isOfflineMode = MutableStateFlow(false)
     val isOfflineMode: StateFlow<Boolean> = _isOfflineMode.asStateFlow()
 
     private val _modelState = MutableStateFlow<ModelState>(ModelState.NotReady)
     val modelState: StateFlow<ModelState> = _modelState.asStateFlow()
+
+    private val _chatTuningSettings = MutableStateFlow(chatTuningSettingsStore.load())
+    val chatTuningSettings: StateFlow<ChatTuningSettings> = _chatTuningSettings.asStateFlow()
+
+    fun updateTemperature(value: Float) {
+        val updated = _chatTuningSettings.value.copy(temperature = value.coerceIn(0f, 2f))
+        _chatTuningSettings.value = updated
+        chatTuningSettingsStore.save(updated)
+    }
+
+    fun updateMaxTokens(value: String) {
+        val parsed = value.toIntOrNull() ?: return
+        val updated = _chatTuningSettings.value.copy(maxTokens = parsed.coerceIn(16, 512))
+        _chatTuningSettings.value = updated
+        chatTuningSettingsStore.save(updated)
+    }
+
+    fun updateSystemPrompt(value: String) {
+        val updated = _chatTuningSettings.value.copy(systemPrompt = value)
+        _chatTuningSettings.value = updated
+        chatTuningSettingsStore.save(updated)
+    }
 
     fun toggleRag(enabled: Boolean) {
         _isRagEnabled.value = enabled
@@ -102,6 +134,25 @@ class ChatViewModel(
         }
     }
 
+    fun importEmbeddingModel(uri: Uri, displayName: String?) {
+        viewModelScope.launch {
+            try {
+                _modelState.value = ModelState.Initializing
+                llamaCppEmbeddingService.release()
+                val importedFile = embeddingModelSelectionManager.importModel(uri, displayName)
+                _embeddingModelFileName.value = displayName ?: importedFile.name
+                if (_isOfflineMode.value && ragFolderPreferences.hasFolder()) {
+                    initializeModel()
+                } else {
+                    _modelState.value = ModelState.NotReady
+                    _error.value = "Embedding-модель выбрана: ${importedFile.name}"
+                }
+            } catch (e: Exception) {
+                _modelState.value = ModelState.Error(e.message ?: "Не удалось импортировать embedding-модель")
+            }
+        }
+    }
+
     fun toggleOfflineMode(enabled: Boolean) {
         _isOfflineMode.value = enabled
         if (enabled && _modelState.value !is ModelState.Ready && _modelState.value !is ModelState.Initializing && _modelState.value !is ModelState.Indexing) {
@@ -117,8 +168,8 @@ class ChatViewModel(
                 if (ragFolderPreferences.hasFolder() && !localRagRepository.isIndexed()) {
                     _modelState.value = ModelState.Indexing
                     localRagRepository.buildIndexIfNeeded()
-                    _isRagIndexed.value = localRagRepository.isIndexed()
                 }
+                _isRagIndexed.value = localRagRepository.isIndexed()
                 _modelState.value = ModelState.Ready
             } catch (e: Exception) {
                 _modelState.value = ModelState.Error(
@@ -155,7 +206,8 @@ class ChatViewModel(
                 history,
                 chatRepository = openAiChatRepo,
                 ragEnabled = _isRagEnabled.value,
-                taskState = _taskState.value
+                taskState = _taskState.value,
+                settings = _chatTuningSettings.value
             )
             val updatedHistory = (history + Message(role = "assistant", content = answer, sources = sources))
                 .takeLast(MAX_HISTORY)
@@ -184,7 +236,8 @@ class ChatViewModel(
                 history,
                 chatRepository = onDeviceChatRepo,
                 ragEnabled = _isRagEnabled.value,
-                taskState = _taskState.value
+                taskState = _taskState.value,
+                settings = _chatTuningSettings.value
             )
             if (answer.isNotBlank()) {
                 val updatedHistory = (history + Message(role = "assistant", content = answer, sources = sources))
@@ -204,5 +257,6 @@ class ChatViewModel(
     override fun onCleared() {
         super.onCleared()
         onDeviceLlamaCppService.release()
+        llamaCppEmbeddingService.release()
     }
 }

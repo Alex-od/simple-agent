@@ -33,6 +33,7 @@ android {
         buildConfigField("String", "OPENAI_API_KEY", "\"${localProps["OPENAI_API_KEY"]}\"")
         buildConfigField("String", "ON_DEVICE_LLM_MODEL_FILENAME", "\"${localProps["ON_DEVICE_LLM_MODEL_FILENAME"] ?: "Qwen2.5-3B-Instruct-Q4_K_M.gguf"}\"")
         buildConfigField("String", "ON_DEVICE_LLM_MODEL_PATH", "\"${localProps["ON_DEVICE_LLM_MODEL_PATH"] ?: ""}\"")
+        buildConfigField("String", "LOCAL_EMBEDDING_MODEL_FILENAME", "\"${localProps["LOCAL_EMBEDDING_MODEL_FILENAME"] ?: ""}\"")
         buildConfigField("String", "LOCAL_EMBEDDING_MODEL_PATH", "\"${localProps["LOCAL_EMBEDDING_MODEL_PATH"] ?: ""}\"")
     }
 

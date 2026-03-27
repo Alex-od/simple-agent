@@ -1,13 +1,13 @@
 package com.danichapps.simpleagent.data.remote
 
 import com.danichapps.simpleagent.data.remote.dto.MessageDto
+import com.danichapps.simpleagent.domain.model.ChatTuningSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 
-private const val MAX_TOKENS = 96
 private const val GENERATION_TIMEOUT_MS = 45_000L
 
 class OnDeviceLlamaCppService(
@@ -25,27 +25,27 @@ class OnDeviceLlamaCppService(
         require(nativeBackend.isLibraryLoaded()) {
             "Native library simpleagent_llama is missing"
         }
-        val error = nativeBackend.initialize(modelFile.absolutePath)
+        val error = nativeBackend.initializeChatModel(modelFile.absolutePath)
         check(error == null) { error ?: "Unknown llama.cpp initialization error" }
         initialized = true
     }
 
     fun release() {
-        nativeBackend.release()
+        nativeBackend.releaseChatModel()
         initialized = false
     }
 
-    override suspend fun sendMessages(messages: List<MessageDto>, jsonMode: Boolean): String {
+    override suspend fun sendMessages(messages: List<MessageDto>, jsonMode: Boolean, settings: ChatTuningSettings): String {
         check(initialized) { "On-device llama.cpp is not initialized" }
         return withContext(Dispatchers.Default) {
             withTimeout(GENERATION_TIMEOUT_MS) {
-                nativeBackend.generate(formatPrompt(messages, jsonMode), MAX_TOKENS)
+                nativeBackend.generate(formatPrompt(messages, jsonMode), settings.maxTokens, settings.temperature)
             }
         }
     }
 
-    override fun sendMessagesStreaming(messages: List<MessageDto>, jsonMode: Boolean): Flow<String> = flow {
-        emit(sendMessages(messages, jsonMode))
+    override fun sendMessagesStreaming(messages: List<MessageDto>, jsonMode: Boolean, settings: ChatTuningSettings): Flow<String> = flow {
+        emit(sendMessages(messages, jsonMode, settings))
     }
 
     private fun formatPrompt(messages: List<MessageDto>, jsonMode: Boolean): String {

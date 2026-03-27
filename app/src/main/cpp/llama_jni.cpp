@@ -16,8 +16,10 @@ constexpr const char * TAG = "simpleagent_llama";
 constexpr uint32_t DEFAULT_CONTEXT_SIZE = 2048;
 
 std::mutex g_mutex;
-llama_model * g_model = nullptr;
-const llama_vocab * g_vocab = nullptr;
+llama_model * g_chat_model = nullptr;
+const llama_vocab * g_chat_vocab = nullptr;
+llama_model * g_embedding_model = nullptr;
+const llama_vocab * g_embedding_vocab = nullptr;
 bool g_backend_initialized = false;
 
 void log_error(const std::string & message) {
@@ -109,21 +111,29 @@ bool decode_tokens_batched(
     return true;
 }
 
-void release_model_locked() {
-    if (g_model != nullptr) {
-        llama_model_free(g_model);
-        g_model = nullptr;
-        g_vocab = nullptr;
+void release_chat_model_locked() {
+    if (g_chat_model != nullptr) {
+        llama_model_free(g_chat_model);
+        g_chat_model = nullptr;
+        g_chat_vocab = nullptr;
     }
 }
 
-std::string generate_internal(const std::string & prompt, int max_tokens) {
-    if (g_model == nullptr || g_vocab == nullptr) {
+void release_embedding_model_locked() {
+    if (g_embedding_model != nullptr) {
+        llama_model_free(g_embedding_model);
+        g_embedding_model = nullptr;
+        g_embedding_vocab = nullptr;
+    }
+}
+
+std::string generate_internal(const std::string & prompt, int max_tokens, float temperature) {
+    if (g_chat_model == nullptr || g_chat_vocab == nullptr) {
         return "Model is not initialized";
     }
 
     const int required_prompt_tokens = -llama_tokenize(
-            g_vocab, prompt.c_str(), static_cast<int32_t>(prompt.size()),
+            g_chat_vocab, prompt.c_str(), static_cast<int32_t>(prompt.size()),
             nullptr, 0, true, true);
     if (required_prompt_tokens <= 0) {
         return "Failed to tokenize prompt";
@@ -131,7 +141,7 @@ std::string generate_internal(const std::string & prompt, int max_tokens) {
 
     std::vector<llama_token> prompt_tokens(static_cast<size_t>(required_prompt_tokens));
     if (llama_tokenize(
-            g_vocab, prompt.c_str(), static_cast<int32_t>(prompt.size()),
+            g_chat_vocab, prompt.c_str(), static_cast<int32_t>(prompt.size()),
             prompt_tokens.data(), static_cast<int32_t>(prompt_tokens.size()),
             true, true) < 0) {
         return "Failed to tokenize prompt";
@@ -147,7 +157,7 @@ std::string generate_internal(const std::string & prompt, int max_tokens) {
     ctx_params.n_threads_batch = 4;
     ctx_params.no_perf = true;
 
-    llama_context * ctx = llama_init_from_model(g_model, ctx_params);
+    llama_context * ctx = llama_init_from_model(g_chat_model, ctx_params);
     if (ctx == nullptr) {
         return "Failed to create llama context";
     }
@@ -155,21 +165,27 @@ std::string generate_internal(const std::string & prompt, int max_tokens) {
     __android_log_print(
             ANDROID_LOG_INFO,
             TAG,
-            "generate_internal prompt_tokens=%d max_tokens=%d n_ctx=%u n_batch=%u",
+            "generate_internal prompt_tokens=%d max_tokens=%d temperature=%.2f n_ctx=%u n_batch=%u",
             static_cast<int>(prompt_tokens.size()),
             max_tokens,
+            temperature,
             ctx_params.n_ctx,
             ctx_params.n_batch);
 
     auto chain_params = llama_sampler_chain_default_params();
     chain_params.no_perf = true;
     llama_sampler * sampler = llama_sampler_chain_init(chain_params);
-    llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
+    if (temperature <= 0.01f) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
+    } else {
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
+        llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));
+    }
 
     std::string output;
     output.reserve(prompt.size() + static_cast<size_t>(max_tokens) * 4);
 
-    if (llama_model_has_encoder(g_model)) {
+    if (llama_model_has_encoder(g_chat_model)) {
         llama_batch batch = llama_batch_get_one(prompt_tokens.data(), static_cast<int32_t>(prompt_tokens.size()));
         if (llama_encode(ctx, batch) != 0) {
             llama_sampler_free(sampler);
@@ -177,15 +193,15 @@ std::string generate_internal(const std::string & prompt, int max_tokens) {
             return "Failed to encode prompt";
         }
 
-        llama_token decoder_start_token = llama_model_decoder_start_token(g_model);
+        llama_token decoder_start_token = llama_model_decoder_start_token(g_chat_model);
         if (decoder_start_token == LLAMA_TOKEN_NULL) {
-            decoder_start_token = llama_vocab_bos(g_vocab);
+            decoder_start_token = llama_vocab_bos(g_chat_vocab);
         }
         batch = llama_batch_get_one(&decoder_start_token, 1);
     }
 
     std::string decode_error;
-    if (!llama_model_has_encoder(g_model)) {
+    if (!llama_model_has_encoder(g_chat_model)) {
         if (!decode_tokens_batched(
                     ctx,
                     prompt_tokens.data(),
@@ -205,11 +221,11 @@ std::string generate_internal(const std::string & prompt, int max_tokens) {
 
     while (n_pos < target_tokens) {
         llama_token new_token = llama_sampler_sample(sampler, ctx, -1);
-        if (llama_vocab_is_eog(g_vocab, new_token)) {
+        if (llama_vocab_is_eog(g_chat_vocab, new_token)) {
             break;
         }
 
-        output += token_to_piece(g_vocab, new_token);
+        output += token_to_piece(g_chat_vocab, new_token);
         std::string step_error;
         if (!decode_tokens_batched(ctx, &new_token, 1, n_pos, 1, step_error)) {
             output = step_error;
@@ -230,13 +246,13 @@ std::string generate_internal(const std::string & prompt, int max_tokens) {
 }
 
 std::vector<float> embed_internal(const std::string & text, std::string & error) {
-    if (g_model == nullptr || g_vocab == nullptr) {
-        error = "Model is not initialized";
+    if (g_embedding_model == nullptr || g_embedding_vocab == nullptr) {
+        error = "Embedding model is not initialized";
         return {};
     }
 
     const int n_tokens = -llama_tokenize(
-            g_vocab, text.c_str(), static_cast<int32_t>(text.size()),
+            g_embedding_vocab, text.c_str(), static_cast<int32_t>(text.size()),
             nullptr, 0, true, true);
     if (n_tokens <= 0) {
         error = "Failed to tokenize text for embedding";
@@ -245,7 +261,7 @@ std::vector<float> embed_internal(const std::string & text, std::string & error)
 
     std::vector<llama_token> tokens(static_cast<size_t>(n_tokens));
     if (llama_tokenize(
-            g_vocab, text.c_str(), static_cast<int32_t>(text.size()),
+            g_embedding_vocab, text.c_str(), static_cast<int32_t>(text.size()),
             tokens.data(), static_cast<int32_t>(tokens.size()),
             true, true) < 0) {
         error = "Failed to tokenize text for embedding";
@@ -262,11 +278,19 @@ std::vector<float> embed_internal(const std::string & text, std::string & error)
     ctx_params.n_threads_batch = 4;
     ctx_params.no_perf       = true;
 
-    llama_context * ctx = llama_init_from_model(g_model, ctx_params);
+    llama_context * ctx = llama_init_from_model(g_embedding_model, ctx_params);
     if (ctx == nullptr) {
         error = "Failed to create embedding context";
         return {};
     }
+
+    __android_log_print(
+            ANDROID_LOG_INFO,
+            TAG,
+            "embed_internal: token_count=%d n_ctx=%u n_batch=%u",
+            n_tokens,
+            ctx_params.n_ctx,
+            ctx_params.n_batch);
 
     llama_batch batch = llama_batch_init(static_cast<int32_t>(tokens.size()), 0, 1);
     batch.n_tokens = static_cast<int32_t>(tokens.size());
@@ -275,7 +299,7 @@ std::vector<float> embed_internal(const std::string & text, std::string & error)
         batch.pos[i]         = i;
         batch.n_seq_id[i]    = 1;
         batch.seq_id[i][0]   = 0;
-        batch.logits[i]      = 1;
+        batch.logits[i]      = 0;
     }
 
     if (llama_decode(ctx, batch) != 0) {
@@ -284,9 +308,14 @@ std::vector<float> embed_internal(const std::string & text, std::string & error)
         llama_free(ctx);
         return {};
     }
+    __android_log_print(
+            ANDROID_LOG_INFO,
+            TAG,
+            "embed_internal: decode finished token_count=%d",
+            batch.n_tokens);
     llama_batch_free(batch);
 
-    const int n_embd = llama_model_n_embd(g_model);
+    const int n_embd = llama_model_n_embd(g_embedding_model);
     const float * embd = llama_get_embeddings_seq(ctx, 0);
     if (embd == nullptr) {
         embd = llama_get_embeddings_ith(ctx, batch.n_tokens - 1);
@@ -321,15 +350,15 @@ Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeIsBackendAvaila
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeIsModelReady(
+Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeIsChatModelReady(
         JNIEnv *, jobject) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    return g_model != nullptr ? JNI_TRUE : JNI_FALSE;
+    return g_chat_model != nullptr ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C"
 JNIEXPORT jstring JNICALL
-Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeInitialize(
+Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeInitializeChatModel(
         JNIEnv * env, jobject, jstring modelPath) {
     std::lock_guard<std::mutex> lock(g_mutex);
 
@@ -340,22 +369,22 @@ Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeInitialize(
         g_backend_initialized = true;
     }
 
-    release_model_locked();
+    release_chat_model_locked();
 
     const std::string model_path = jstring_to_string(env, modelPath);
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = 0;
 
-    g_model = llama_model_load_from_file(model_path.c_str(), model_params);
-    if (g_model == nullptr) {
+    g_chat_model = llama_model_load_from_file(model_path.c_str(), model_params);
+    if (g_chat_model == nullptr) {
         const std::string error = "Unable to load GGUF model: " + model_path;
         log_error(error);
         return env->NewStringUTF(error.c_str());
     }
 
-    g_vocab = llama_model_get_vocab(g_model);
-    if (g_vocab == nullptr) {
-        release_model_locked();
+    g_chat_vocab = llama_model_get_vocab(g_chat_model);
+    if (g_chat_vocab == nullptr) {
+        release_chat_model_locked();
         const std::string error = "Unable to obtain model vocabulary";
         log_error(error);
         return env->NewStringUTF(error.c_str());
@@ -366,11 +395,59 @@ Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeInitialize(
 
 extern "C"
 JNIEXPORT jstring JNICALL
+Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeInitializeEmbeddingModel(
+        JNIEnv * env, jobject, jstring modelPath) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_backend_initialized) {
+        llama_log_set(llama_log_callback, nullptr);
+        llama_backend_init();
+        ggml_backend_load_all();
+        g_backend_initialized = true;
+    }
+
+    release_embedding_model_locked();
+
+    const std::string model_path = jstring_to_string(env, modelPath);
+    llama_model_params model_params = llama_model_default_params();
+    model_params.n_gpu_layers = 0;
+
+    g_embedding_model = llama_model_load_from_file(model_path.c_str(), model_params);
+    if (g_embedding_model == nullptr) {
+        const std::string error = "Unable to load embedding GGUF model: " + model_path;
+        log_error(error);
+        return env->NewStringUTF(error.c_str());
+    }
+
+    g_embedding_vocab = llama_model_get_vocab(g_embedding_model);
+    if (g_embedding_vocab == nullptr) {
+        release_embedding_model_locked();
+        const std::string error = "Unable to obtain embedding model vocabulary";
+        log_error(error);
+        return env->NewStringUTF(error.c_str());
+    }
+
+    return nullptr;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeIsEmbeddingModelReady(
+        JNIEnv *, jobject) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_embedding_model != nullptr ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
 Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeGenerate(
-        JNIEnv * env, jobject, jstring prompt, jint maxTokens) {
+        JNIEnv * env, jobject, jstring prompt, jint maxTokens, jfloat temperature) {
     std::lock_guard<std::mutex> lock(g_mutex);
     const std::string prompt_text = jstring_to_string(env, prompt);
-    const std::string result = generate_internal(prompt_text, std::max(1, static_cast<int>(maxTokens)));
+    const std::string result = generate_internal(
+            prompt_text,
+            std::max(1, static_cast<int>(maxTokens)),
+            std::max(0.0f, static_cast<float>(temperature)));
     return env->NewStringUTF(result.c_str());
 }
 
@@ -395,10 +472,27 @@ Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeEmbed(
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeRelease(
+Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeReleaseChatModel(
         JNIEnv *, jobject) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    release_model_locked();
+    release_chat_model_locked();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeReleaseEmbeddingModel(
+        JNIEnv *, jobject) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    release_embedding_model_locked();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_danichapps_simpleagent_data_remote_LlamaCppNative_nativeReleaseAll(
+        JNIEnv *, jobject) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    release_chat_model_locked();
+    release_embedding_model_locked();
     if (g_backend_initialized) {
         llama_backend_free();
         g_backend_initialized = false;

@@ -10,9 +10,10 @@ import kotlinx.serialization.json.Json
 import java.io.File
 
 private const val CACHE_FILENAME = "rag_chunks.json"
-private const val CACHE_SCHEMA_VERSION = 2
-private const val CHUNK_SIZE_WORDS = 150
-private const val OVERLAP_WORDS = 30
+private const val CACHE_SCHEMA_VERSION = 4
+private const val MAX_CHUNK_CHARS = 360
+private const val MAX_HEADER_CHARS = 220
+private const val MIN_PARAGRAPH_CHARS = 40
 
 @Serializable
 private data class RagChunkDto(val source: String, val chunkIndex: Int, val text: String)
@@ -79,8 +80,9 @@ class LocalRagChunksDataSource(
     private fun buildAndCache(folderUri: String, documents: List<RagDocument>): List<RagChunk> {
         val chunks = buildList {
             documents.forEach { document ->
-                val text = extractText(document) ?: return@forEach
-                addAll(chunkText(text, document.name))
+                val paragraphs = extractParagraphs(document)
+                if (paragraphs.isEmpty()) return@forEach
+                addAll(chunkParagraphs(paragraphs, document.name))
             }
         }
         saveToCache(folderUri, documents, chunks)
@@ -102,33 +104,92 @@ class LocalRagChunksDataSource(
             }
     }
 
-    private fun extractText(document: RagDocument): String? {
+    private fun extractParagraphs(document: RagDocument): List<String> {
         val uri = android.net.Uri.parse(document.uri)
         return context.contentResolver.openInputStream(uri)?.use { input ->
             when {
-                document.name.endsWith(".docx", ignoreCase = true) -> DocxTextExtractor().extract(input)
+                document.name.endsWith(".docx", ignoreCase = true) -> DocxTextExtractor()
+                    .extract(input)
+                    .lineSequence()
+                    .map(String::trim)
+                    .filter { it.length >= MIN_PARAGRAPH_CHARS }
+                    .toList()
                 document.name.endsWith(".txt", ignoreCase = true) || document.name.endsWith(".md", ignoreCase = true) ->
-                    input.bufferedReader().readText()
-                else -> null
+                    input.bufferedReader()
+                        .readText()
+                        .split(Regex("\\r?\\n\\s*\\r?\\n|\\r?\\n"))
+                        .map(String::trim)
+                        .filter { it.length >= MIN_PARAGRAPH_CHARS }
+                else -> emptyList()
             }
-        }
+        } ?: emptyList()
     }
 
-    private fun chunkText(text: String, source: String): List<RagChunk> {
-        val words = text.split("\\s+".toRegex()).filter { it.isNotBlank() }
-        if (words.size <= CHUNK_SIZE_WORDS) {
-            return listOf(RagChunk(source = source, chunkIndex = 0, text = words.joinToString(" ")))
-        }
+    private fun chunkParagraphs(paragraphs: List<String>, source: String): List<RagChunk> {
+        if (paragraphs.isEmpty()) return emptyList()
 
         val chunks = mutableListOf<RagChunk>()
-        var start = 0
         var index = 0
-        while (start < words.size) {
-            val end = minOf(start + CHUNK_SIZE_WORDS, words.size)
-            chunks.add(RagChunk(source = source, chunkIndex = index++, text = words.subList(start, end).joinToString(" ")))
-            start += CHUNK_SIZE_WORDS - OVERLAP_WORDS
+        var start = 0
+
+        val headerChunk = buildString {
+            for (paragraph in paragraphs) {
+                if (isNotBlank()) append("\n")
+                append(paragraph)
+                if (length >= MAX_HEADER_CHARS) break
+            }
+        }.trim()
+
+        if (headerChunk.isNotBlank()) {
+            chunks.add(RagChunk(source = source, chunkIndex = index++, text = headerChunk))
+            start = headerParagraphCount(paragraphs)
         }
+
+        while (start in paragraphs.indices) {
+            val chunkText = buildString {
+                var cursor = start
+                while (cursor < paragraphs.size) {
+                    val addition = if (isBlank()) paragraphs[cursor] else "\n\n${paragraphs[cursor]}"
+                    if ((length + addition.length) > MAX_CHUNK_CHARS && cursor > start) break
+                    append(addition)
+                    cursor++
+                    if (length >= MAX_CHUNK_CHARS) break
+                }
+            }.trim()
+
+            if (chunkText.isNotBlank()) {
+                chunks.add(RagChunk(source = source, chunkIndex = index++, text = chunkText.take(MAX_CHUNK_CHARS)))
+            }
+
+            val nextStart = nextChunkStart(paragraphs, start)
+            if (nextStart <= start) break
+            start = nextStart
+        }
+
         return chunks
+    }
+
+    private fun nextChunkStart(paragraphs: List<String>, start: Int): Int {
+        var consumedChars = 0
+        var cursor = start
+        while (cursor < paragraphs.size) {
+            consumedChars += paragraphs[cursor].length + 2
+            cursor++
+            if (consumedChars >= MAX_CHUNK_CHARS) break
+        }
+        if (cursor >= paragraphs.size) return paragraphs.size
+        return cursor
+    }
+
+    private fun headerParagraphCount(paragraphs: List<String>): Int {
+        var consumedChars = 0
+        var cursor = 0
+        while (cursor < paragraphs.size) {
+            consumedChars += paragraphs[cursor].length + 1
+            cursor++
+            if (consumedChars >= MAX_HEADER_CHARS) break
+        }
+        return cursor.coerceAtLeast(1)
     }
 
     private fun saveToCache(folderUri: String, documents: List<RagDocument>, chunks: List<RagChunk>) {

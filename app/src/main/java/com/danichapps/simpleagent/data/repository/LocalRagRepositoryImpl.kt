@@ -1,11 +1,11 @@
 package com.danichapps.simpleagent.data.repository
 
 import android.content.Context
-import com.danichapps.simpleagent.data.local.BM25Scorer
+import android.util.Log
 import com.danichapps.simpleagent.data.local.GemmaRerankService
 import com.danichapps.simpleagent.data.local.LocalRagChunksDataSource
-import com.danichapps.simpleagent.data.remote.LlamaCppEmbeddingService
 import com.danichapps.simpleagent.data.local.ScoredChunk
+import com.danichapps.simpleagent.data.remote.LlamaCppEmbeddingService
 import com.danichapps.simpleagent.domain.model.RagChunk
 import com.danichapps.simpleagent.domain.repository.RagRepository
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +16,7 @@ import java.io.File
 import kotlin.math.sqrt
 
 private const val EMBEDDINGS_CACHE_FILENAME = "rag_embeddings_llama.bin"
+private const val TAG = "LocalRagRepository"
 
 class LocalRagRepositoryImpl(
     private val chunksDataSource: LocalRagChunksDataSource,
@@ -25,19 +26,28 @@ class LocalRagRepositoryImpl(
 ) : RagRepository {
 
     private var cachedEmbeddings: List<Pair<RagChunk, FloatArray>>? = null
-    private var bm25Scorer: BM25Scorer? = null
 
-    override fun isIndexed(): Boolean = chunksDataSource.hasCachedIndex()
+    override fun isIndexed(): Boolean = hasEmbeddingsCache()
+
+    override fun hasDocumentCache(): Boolean = chunksDataSource.hasCachedIndex()
 
     override suspend fun buildIndexIfNeeded() {
         val chunks = chunksDataSource.getChunks()
-        if (chunks.isEmpty()) return
-        if (!embeddingService.isAvailable()) return
+        if (chunks.isEmpty()) {
+            Log.w(TAG, "buildIndexIfNeeded: no chunks found")
+            return
+        }
+        if (!embeddingService.ensureInitialized()) {
+            Log.w(TAG, "buildIndexIfNeeded: embedding service is not available")
+            return
+        }
         val cached = loadEmbeddingsFromDisk()
         if (cached != null && cached.size == chunks.size && cached.map { it.first } == chunks) {
             cachedEmbeddings = cached
+            Log.i(TAG, "buildIndexIfNeeded: using cached embeddings count=${cached.size}")
             return
         }
+        Log.i(TAG, "buildIndexIfNeeded: computing embeddings for chunks=${chunks.size}")
         computeAndCacheEmbeddings(chunks)
     }
 
@@ -45,28 +55,25 @@ class LocalRagRepositoryImpl(
         val chunks = chunksDataSource.getChunks()
         if (chunks.isEmpty()) return emptyList()
 
-        val bm25 = bm25Scorer ?: BM25Scorer(chunks.map { it.text }).also { bm25Scorer = it }
-        val bm25Scores = chunks.indices.map { i -> bm25.score(query, i) }
-        val maxBm25 = bm25Scores.maxOrNull()?.takeIf { it > 0f } ?: 1f
         val embeddings = getOrComputeEmbeddings()
-        val queryEmbedding = if (embeddingService.isAvailable()) embeddingService.embed(query) else null
+            ?.takeIf { it.size == chunks.size }
+            ?: return emptyList()
+        val queryEmbedding = embeddingService.embed(query) ?: return emptyList()
 
         val scored = chunks.mapIndexed { i, chunk ->
-            val bm25Norm = bm25Scores[i] / maxBm25
-            val cosine = if (queryEmbedding != null && embeddings != null) {
-                cosineSimilarity(queryEmbedding, embeddings[i].second)
-            } else {
-                0f
-            }
-            val score = if (queryEmbedding != null && embeddings != null) {
-                cosine * 0.6f + bm25Norm * 0.4f
-            } else {
-                bm25Norm
-            }
-            ScoredChunk(chunk, score)
+            val cosine = cosineSimilarity(queryEmbedding, embeddings[i].second)
+            ScoredChunk(chunk, cosine)
         }
 
-        return rerankService.rerank(query, scored)
+        val reranked = rerankService.rerank(query, scored, topK)
+        reranked.firstOrNull()?.let { topChunk ->
+            val preview = topChunk.text.replace("\n", " ").take(180)
+            Log.i(
+                TAG,
+                "searchContext: query=\"$query\" topChunk=${topChunk.chunkIndex} source=${topChunk.source} preview=\"$preview\""
+            )
+        } ?: Log.w(TAG, "searchContext: query=\"$query\" produced no chunks")
+        return reranked
     }
 
     private suspend fun getOrComputeEmbeddings(): List<Pair<RagChunk, FloatArray>>? {
@@ -75,6 +82,7 @@ class LocalRagRepositoryImpl(
         val diskCache = loadEmbeddingsFromDisk()
         if (diskCache != null) {
             cachedEmbeddings = diskCache
+            Log.i(TAG, "getOrComputeEmbeddings: loaded embeddings from disk count=${diskCache.size}")
             return diskCache
         }
 
@@ -85,13 +93,20 @@ class LocalRagRepositoryImpl(
 
     private suspend fun computeAndCacheEmbeddings(chunks: List<RagChunk>): List<Pair<RagChunk, FloatArray>>? =
         withContext(Dispatchers.IO) {
-            val result = chunks.mapNotNull { chunk ->
-                val embedding = embeddingService.embed(chunk.text) ?: return@mapNotNull null
-                chunk to embedding
+            val result = mutableListOf<Pair<RagChunk, FloatArray>>()
+            chunks.forEachIndexed { index, chunk ->
+                val embedding = embeddingService.embed(chunk.text)
+                if (embedding == null) {
+                    Log.e(TAG, "computeAndCacheEmbeddings: embedding failed for chunkIndex=${chunk.chunkIndex} source=${chunk.source} position=$index/${chunks.size}")
+                    return@withContext null
+                }
+                result += chunk to embedding
+                Log.d(TAG, "computeAndCacheEmbeddings: embedded chunkIndex=${chunk.chunkIndex} position=${index + 1}/${chunks.size} dim=${embedding.size}")
             }
 
-            if (result.isNotEmpty()) saveEmbeddingsToDisk(result)
+            saveEmbeddingsToDisk(result)
             cachedEmbeddings = result
+            Log.i(TAG, "computeAndCacheEmbeddings: embeddings saved count=${result.size}")
             result
         }
 
@@ -113,6 +128,8 @@ class LocalRagRepositoryImpl(
                     RagChunk(source = source, chunkIndex = chunkIndex, text = text) to embedding
                 }
             }
+        }.onFailure {
+            Log.e(TAG, "loadEmbeddingsFromDisk: failed to read cache", it)
         }.getOrNull()
     }
 
@@ -131,8 +148,12 @@ class LocalRagRepositoryImpl(
                     embedding.forEach { stream.writeFloat(it) }
                 }
             }
+        }.onFailure {
+            Log.e(TAG, "saveEmbeddingsToDisk: failed to write cache", it)
         }
     }
+
+    private fun hasEmbeddingsCache(): Boolean = File(context.filesDir, EMBEDDINGS_CACHE_FILENAME).exists()
 
     private fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
         var dot = 0f
