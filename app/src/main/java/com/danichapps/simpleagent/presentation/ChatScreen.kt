@@ -21,9 +21,11 @@ fun ChatScreen(viewModel: ChatViewModel = koinViewModel()) {
     val ragFolderName by viewModel.ragFolderName.collectAsState()
     val modelFileName by viewModel.modelFileName.collectAsState()
     val embeddingModelFileName by viewModel.embeddingModelFileName.collectAsState()
-    val isOfflineMode by viewModel.isOfflineMode.collectAsState()
+    val chatMode by viewModel.chatMode.collectAsState()
     val modelState by viewModel.modelState.collectAsState()
     val chatTuningSettings by viewModel.chatTuningSettings.collectAsState()
+    val localServerSettings by viewModel.localServerSettings.collectAsState()
+
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             context.contentResolver.takePersistableUriPermission(
@@ -64,15 +66,18 @@ fun ChatScreen(viewModel: ChatViewModel = koinViewModel()) {
         ragFolderName = ragFolderName,
         modelFileName = modelFileName,
         embeddingModelFileName = embeddingModelFileName,
-        isOfflineMode = isOfflineMode,
+        chatMode = chatMode,
         modelState = modelState,
         chatTuningSettings = chatTuningSettings,
+        localServerSettings = localServerSettings,
         onSendMessage = viewModel::sendMessage,
         onRagToggle = viewModel::toggleRag,
-        onOfflineModeToggle = viewModel::toggleOfflineMode,
+        onChatModeChange = viewModel::setChatMode,
         onTemperatureChange = viewModel::updateTemperature,
         onMaxTokensChange = viewModel::updateMaxTokens,
         onSystemPromptChange = viewModel::updateSystemPrompt,
+        onServerUrlChange = viewModel::updateServerBaseUrl,
+        onServerModelChange = viewModel::updateServerModel,
         onPickRagFolder = { folderPicker.launch(null) },
         onPickModelFile = { modelPicker.launch(arrayOf("*/*")) },
         onPickEmbeddingModelFile = { embeddingModelPicker.launch(arrayOf("*/*")) }

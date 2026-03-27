@@ -1,15 +1,20 @@
-﻿package com.danichapps.simpleagent.presentation
+package com.danichapps.simpleagent.presentation
 
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.danichapps.simpleagent.data.local.ChatModeStore
+import com.danichapps.simpleagent.data.local.ChatTuningSettingsStore
+import com.danichapps.simpleagent.data.local.EmbeddingModelSelectionManager
+import com.danichapps.simpleagent.data.local.LocalServerSettingsStore
 import com.danichapps.simpleagent.data.local.ModelSelectionManager
 import com.danichapps.simpleagent.data.local.RagFolderPreferences
-import com.danichapps.simpleagent.data.local.EmbeddingModelSelectionManager
-import com.danichapps.simpleagent.data.local.ChatTuningSettingsStore
 import com.danichapps.simpleagent.data.remote.LlamaCppEmbeddingService
+import com.danichapps.simpleagent.data.remote.LocalServerProbe
 import com.danichapps.simpleagent.data.remote.OnDeviceLlamaCppService
+import com.danichapps.simpleagent.domain.model.ChatMode
 import com.danichapps.simpleagent.domain.model.ChatTuningSettings
+import com.danichapps.simpleagent.domain.model.LocalServerSettings
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.TaskState
 import com.danichapps.simpleagent.domain.repository.ChatRepository
@@ -36,7 +41,9 @@ sealed class ModelState {
 class ChatViewModel(
     private val openAiChatRepo: ChatRepository,
     private val onDeviceChatRepo: ChatRepository,
+    private val localServerChatRepo: ChatRepository,
     private val onDeviceLlamaCppService: OnDeviceLlamaCppService,
+    private val localServerProbe: LocalServerProbe,
     private val llamaCppEmbeddingService: LlamaCppEmbeddingService,
     private val onlineSendMessageUseCase: SendMessageUseCase,
     private val offlineSendMessageUseCase: OfflineSendMessageUseCase,
@@ -45,7 +52,9 @@ class ChatViewModel(
     private val ragFolderPreferences: RagFolderPreferences,
     private val modelSelectionManager: ModelSelectionManager,
     private val embeddingModelSelectionManager: EmbeddingModelSelectionManager,
-    private val chatTuningSettingsStore: ChatTuningSettingsStore
+    private val chatTuningSettingsStore: ChatTuningSettingsStore,
+    private val chatModeStore: ChatModeStore,
+    private val localServerSettingsStore: LocalServerSettingsStore
 ) : ViewModel() {
 
     private val _taskState = MutableStateFlow(TaskState())
@@ -74,14 +83,25 @@ class ChatViewModel(
     private val _embeddingModelFileName = MutableStateFlow(embeddingModelSelectionManager.getSelectedModelDisplayName())
     val embeddingModelFileName: StateFlow<String?> = _embeddingModelFileName.asStateFlow()
 
-    private val _isOfflineMode = MutableStateFlow(false)
-    val isOfflineMode: StateFlow<Boolean> = _isOfflineMode.asStateFlow()
+    private val _chatMode = MutableStateFlow(chatModeStore.load())
+    val chatMode: StateFlow<ChatMode> = _chatMode.asStateFlow()
 
-    private val _modelState = MutableStateFlow<ModelState>(ModelState.NotReady)
+    private val _modelState = MutableStateFlow<ModelState>(initialModelState(_chatMode.value))
     val modelState: StateFlow<ModelState> = _modelState.asStateFlow()
 
     private val _chatTuningSettings = MutableStateFlow(chatTuningSettingsStore.load())
     val chatTuningSettings: StateFlow<ChatTuningSettings> = _chatTuningSettings.asStateFlow()
+
+    private val _localServerSettings = MutableStateFlow(localServerSettingsStore.load())
+    val localServerSettings: StateFlow<LocalServerSettings> = _localServerSettings.asStateFlow()
+
+    init {
+        if (_chatMode.value == ChatMode.LOCAL_SERVER) {
+            viewModelScope.launch { initializeLocalServer() }
+        } else if (_chatMode.value == ChatMode.ON_DEVICE) {
+            viewModelScope.launch { initializeOnDevice() }
+        }
+    }
 
     fun updateTemperature(value: Float) {
         val updated = _chatTuningSettings.value.copy(temperature = value.coerceIn(0f, 2f))
@@ -102,6 +122,48 @@ class ChatViewModel(
         chatTuningSettingsStore.save(updated)
     }
 
+    fun updateServerBaseUrl(value: String) {
+        val updated = _localServerSettings.value.copy(baseUrl = value)
+        _localServerSettings.value = updated
+        localServerSettingsStore.save(updated)
+        if (_chatMode.value == ChatMode.LOCAL_SERVER) {
+            _modelState.value = ModelState.NotReady
+        }
+    }
+
+    fun updateServerModel(value: String) {
+        val updated = _localServerSettings.value.copy(model = value)
+        _localServerSettings.value = updated
+        localServerSettingsStore.save(updated)
+        if (_chatMode.value == ChatMode.LOCAL_SERVER) {
+            _modelState.value = ModelState.NotReady
+        }
+    }
+
+    fun setChatMode(mode: ChatMode) {
+        if (_chatMode.value == mode) return
+        _chatMode.value = mode
+        chatModeStore.save(mode)
+        _error.value = null
+
+        when (mode) {
+            ChatMode.OPENAI -> {
+                onDeviceLlamaCppService.release()
+                _modelState.value = ModelState.NotReady
+                _isRagIndexed.value = localRagRepository.isIndexed()
+            }
+
+            ChatMode.ON_DEVICE -> {
+                viewModelScope.launch { initializeOnDevice() }
+            }
+
+            ChatMode.LOCAL_SERVER -> {
+                onDeviceLlamaCppService.release()
+                viewModelScope.launch { initializeLocalServer() }
+            }
+        }
+    }
+
     fun toggleRag(enabled: Boolean) {
         _isRagEnabled.value = enabled
     }
@@ -110,8 +172,10 @@ class ChatViewModel(
         ragFolderPreferences.save(uri, displayName)
         _ragFolderName.value = displayName
         _isRagIndexed.value = localRagRepository.isIndexed()
-        if (_isOfflineMode.value) {
-            initializeModel()
+        when (_chatMode.value) {
+            ChatMode.ON_DEVICE -> viewModelScope.launch { initializeOnDevice() }
+            ChatMode.LOCAL_SERVER -> viewModelScope.launch { initializeLocalServer() }
+            ChatMode.OPENAI -> Unit
         }
     }
 
@@ -122,10 +186,10 @@ class ChatViewModel(
                 onDeviceLlamaCppService.release()
                 val importedFile = modelSelectionManager.importModel(uri, displayName)
                 _modelFileName.value = displayName ?: importedFile.name
-                if (_isOfflineMode.value) {
-                    initializeModel()
+                if (_chatMode.value == ChatMode.ON_DEVICE) {
+                    initializeOnDevice()
                 } else {
-                    _modelState.value = ModelState.NotReady
+                    _modelState.value = initialModelState(_chatMode.value)
                     _error.value = "Модель выбрана: ${importedFile.name}"
                 }
             } catch (e: Exception) {
@@ -141,40 +205,16 @@ class ChatViewModel(
                 llamaCppEmbeddingService.release()
                 val importedFile = embeddingModelSelectionManager.importModel(uri, displayName)
                 _embeddingModelFileName.value = displayName ?: importedFile.name
-                if (_isOfflineMode.value && ragFolderPreferences.hasFolder()) {
-                    initializeModel()
-                } else {
-                    _modelState.value = ModelState.NotReady
-                    _error.value = "Embedding-модель выбрана: ${importedFile.name}"
+                when (_chatMode.value) {
+                    ChatMode.ON_DEVICE -> initializeOnDevice()
+                    ChatMode.LOCAL_SERVER -> initializeLocalServer()
+                    ChatMode.OPENAI -> {
+                        _modelState.value = initialModelState(_chatMode.value)
+                        _error.value = "Embedding-модель выбрана: ${importedFile.name}"
+                    }
                 }
             } catch (e: Exception) {
                 _modelState.value = ModelState.Error(e.message ?: "Не удалось импортировать embedding-модель")
-            }
-        }
-    }
-
-    fun toggleOfflineMode(enabled: Boolean) {
-        _isOfflineMode.value = enabled
-        if (enabled && _modelState.value !is ModelState.Ready && _modelState.value !is ModelState.Initializing && _modelState.value !is ModelState.Indexing) {
-            initializeModel()
-        }
-    }
-
-    private fun initializeModel() {
-        viewModelScope.launch {
-            _modelState.value = ModelState.Initializing
-            try {
-                onDeviceLlamaCppService.initialize()
-                if (ragFolderPreferences.hasFolder() && !localRagRepository.isIndexed()) {
-                    _modelState.value = ModelState.Indexing
-                    localRagRepository.buildIndexIfNeeded()
-                }
-                _isRagIndexed.value = localRagRepository.isIndexed()
-                _modelState.value = ModelState.Ready
-            } catch (e: Exception) {
-                _modelState.value = ModelState.Error(
-                    e.message ?: "Не удалось инициализировать on-device llama.cpp"
-                )
             }
         }
     }
@@ -185,26 +225,83 @@ class ChatViewModel(
             _error.value = "Выберите папку базы RAG перед поиском по документам."
             return
         }
+
         viewModelScope.launch {
-            val userMsg = Message(role = "user", content = text)
-            val historyWithUser = (_messages.value + userMsg).takeLast(MAX_HISTORY)
-            _messages.value = historyWithUser
             _isLoading.value = true
             _error.value = null
 
-            if (_isOfflineMode.value) {
-                sendOffline(historyWithUser)
-            } else {
-                sendOnline(historyWithUser)
+            val ready = ensureCurrentModeReady()
+            if (!ready) {
+                _isLoading.value = false
+                return@launch
+            }
+
+            val userMsg = Message(role = "user", content = text)
+            val maxHistory = if (_chatMode.value == ChatMode.ON_DEVICE) MAX_HISTORY_OFFLINE else MAX_HISTORY
+            val historyWithUser = (_messages.value + userMsg).takeLast(maxHistory)
+            _messages.value = historyWithUser
+
+            when (_chatMode.value) {
+                ChatMode.ON_DEVICE -> sendOnDevice(historyWithUser)
+                ChatMode.OPENAI -> sendRemote(historyWithUser, openAiChatRepo)
+                ChatMode.LOCAL_SERVER -> sendRemote(historyWithUser, localServerChatRepo)
             }
         }
     }
 
-    private suspend fun sendOnline(history: List<Message>) {
+    private suspend fun ensureCurrentModeReady(): Boolean = when (_chatMode.value) {
+        ChatMode.OPENAI -> true
+        ChatMode.ON_DEVICE -> initializeOnDevice()
+        ChatMode.LOCAL_SERVER -> initializeLocalServer()
+    }
+
+    private suspend fun initializeOnDevice(): Boolean {
+        _modelState.value = ModelState.Initializing
+        return try {
+            onDeviceLlamaCppService.initialize()
+            prepareRagIfNeeded()
+            _modelState.value = ModelState.Ready
+            true
+        } catch (e: Exception) {
+            _modelState.value = ModelState.Error(
+                e.message ?: "Не удалось инициализировать on-device llama.cpp"
+            )
+            false
+        }
+    }
+
+    private suspend fun initializeLocalServer(): Boolean {
+        _modelState.value = ModelState.Initializing
+        return try {
+            val settings = _localServerSettings.value
+            check(settings.baseUrl.isNotBlank()) { "Укажите Local server URL" }
+            check(settings.model.isNotBlank()) { "Укажите model name для Local server" }
+            localServerProbe.checkHealth(settings.baseUrl)
+            localServerProbe.ensureModelAvailable(settings.baseUrl, settings.model)
+            prepareRagIfNeeded()
+            _modelState.value = ModelState.Ready
+            true
+        } catch (e: Exception) {
+            _modelState.value = ModelState.Error(
+                e.message ?: "Не удалось проверить Local server"
+            )
+            false
+        }
+    }
+
+    private suspend fun prepareRagIfNeeded() {
+        if (ragFolderPreferences.hasFolder() && !localRagRepository.isIndexed()) {
+            _modelState.value = ModelState.Indexing
+            localRagRepository.buildIndexIfNeeded()
+        }
+        _isRagIndexed.value = localRagRepository.isIndexed()
+    }
+
+    private suspend fun sendRemote(history: List<Message>, chatRepository: ChatRepository) {
         try {
             val (answer, sources) = onlineSendMessageUseCase(
                 history,
-                chatRepository = openAiChatRepo,
+                chatRepository = chatRepository,
                 ragEnabled = _isRagEnabled.value,
                 taskState = _taskState.value,
                 settings = _chatTuningSettings.value
@@ -219,13 +316,17 @@ class ChatViewModel(
                 }
             }
         } catch (e: Exception) {
-            _error.value = e.message ?: "Ошибка соединения"
+            _error.value = when (_chatMode.value) {
+                ChatMode.OPENAI -> e.message ?: "Ошибка соединения с OpenAI"
+                ChatMode.LOCAL_SERVER -> e.message ?: "Ошибка Local server"
+                ChatMode.ON_DEVICE -> e.message ?: "Ошибка удалённой генерации"
+            }
         } finally {
             _isLoading.value = false
         }
     }
 
-    private suspend fun sendOffline(history: List<Message>) {
+    private suspend fun sendOnDevice(history: List<Message>) {
         if (_modelState.value !is ModelState.Ready) {
             _error.value = "Локальная модель не готова. Убедитесь, что GGUF лежит на телефоне и native llama.cpp подключён."
             _isLoading.value = false
@@ -259,4 +360,7 @@ class ChatViewModel(
         onDeviceLlamaCppService.release()
         llamaCppEmbeddingService.release()
     }
+
+    private fun initialModelState(mode: ChatMode): ModelState =
+        if (mode == ChatMode.OPENAI) ModelState.NotReady else ModelState.NotReady
 }

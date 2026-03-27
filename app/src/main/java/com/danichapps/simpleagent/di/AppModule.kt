@@ -1,15 +1,18 @@
 package com.danichapps.simpleagent.di
 
 import com.danichapps.simpleagent.BuildConfig
+import com.danichapps.simpleagent.data.local.ChatModeStore
 import com.danichapps.simpleagent.data.local.ChatTuningSettingsStore
 import com.danichapps.simpleagent.data.local.EmbeddingModelSelectionManager
+import com.danichapps.simpleagent.data.local.LocalServerSettingsStore
 import com.danichapps.simpleagent.data.local.ModelSelectionManager
 import com.danichapps.simpleagent.data.remote.DeviceModelPathResolver
 import com.danichapps.simpleagent.data.remote.EmbeddingModelPathResolver
 import com.danichapps.simpleagent.data.remote.LlamaCppEmbeddingService
 import com.danichapps.simpleagent.data.remote.LlamaCppNative
+import com.danichapps.simpleagent.data.remote.LocalServerProbe
+import com.danichapps.simpleagent.data.remote.OpenAiCompatibleChatService
 import com.danichapps.simpleagent.data.remote.OnDeviceLlamaCppService
-import com.danichapps.simpleagent.data.remote.OpenAiService
 import com.danichapps.simpleagent.data.local.GemmaRerankService
 import com.danichapps.simpleagent.data.local.LocalRagChunksDataSource
 import com.danichapps.simpleagent.data.local.RagFolderPreferences
@@ -69,7 +72,40 @@ val appModule = module {
         }
     }
 
-    single<ChatRepository>(named("openai")) { ChatRepositoryImpl(OpenAiService(get(named("openai")))) }
+    single(named("local_server")) {
+        HttpClient(OkHttp) {
+            install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+            install(Logging) { level = LogLevel.BODY }
+            install(HttpTimeout) {
+                requestTimeoutMillis = OPENAI_TIMEOUT_MS
+                socketTimeoutMillis = OPENAI_TIMEOUT_MS
+                connectTimeoutMillis = OPENAI_TIMEOUT_MS
+            }
+        }
+    }
+
+    single { ChatModeStore(androidContext()) }
+    single { LocalServerSettingsStore(androidContext()) }
+    single(named("openai_chat_service")) {
+        OpenAiCompatibleChatService(get(named("openai"))) {
+            com.danichapps.simpleagent.data.remote.ChatEndpointConfig(
+                baseUrl = "https://api.openai.com/v1",
+                model = "gpt-4o-mini"
+            )
+        }
+    }
+    single(named("local_server_chat_service")) {
+        val settingsStore: LocalServerSettingsStore = get()
+        OpenAiCompatibleChatService(get(named("local_server"))) {
+            val settings = settingsStore.load()
+            com.danichapps.simpleagent.data.remote.ChatEndpointConfig(
+                baseUrl = settings.baseUrl,
+                model = settings.model
+            )
+        }
+    }
+    single { LocalServerProbe(get(named("local_server"))) }
+    single<ChatRepository>(named("openai")) { ChatRepositoryImpl(get(named("openai_chat_service"))) }
     single { ModelSelectionManager(androidContext()) }
     single { EmbeddingModelSelectionManager(androidContext()) }
     single { DeviceModelPathResolver(androidContext(), get()) }
@@ -77,6 +113,7 @@ val appModule = module {
     single { LlamaCppNative() }
     single { OnDeviceLlamaCppService(get(), get()) }
     single<ChatRepository>(named("ondevice")) { ChatRepositoryImpl(get<OnDeviceLlamaCppService>()) }
+    single<ChatRepository>(named("local_server")) { ChatRepositoryImpl(get(named("local_server_chat_service"))) }
 
     single { RagService(get(named("rag"))) }
 
@@ -97,12 +134,16 @@ val appModule = module {
         ChatViewModel(
             get(named("openai")),
             get(named("ondevice")),
+            get(named("local_server")),
             get<OnDeviceLlamaCppService>(),
+            get<LocalServerProbe>(),
             get<LlamaCppEmbeddingService>(),
             get(named("online")),
             get(),
             get(),
             get(named("local")),
+            get(),
+            get(),
             get(),
             get(),
             get(),

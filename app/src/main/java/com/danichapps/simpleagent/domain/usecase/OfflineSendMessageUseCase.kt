@@ -10,7 +10,7 @@ import com.danichapps.simpleagent.domain.repository.ChatRepository
 import com.danichapps.simpleagent.domain.repository.RagRepository
 
 private const val MAX_RAG_CHUNKS_IN_OFFLINE_PROMPT = 1
-private const val MAX_RAG_CHARS_PER_OFFLINE_CHUNK = 450
+private const val MAX_RAG_CHARS_PER_OFFLINE_CHUNK = 280
 private const val TAG = "OfflineSendMessage"
 
 private fun RagChunk.toOfflineSource(): RagSource = RagSource(
@@ -47,6 +47,7 @@ class OfflineSendMessageUseCase(
             if (settings.systemPrompt.isNotBlank()) {
                 appendLine(settings.systemPrompt.trim())
             }
+            appendLine("Be concise. Reply in 1-2 short sentences when possible.")
             appendLine("Отвечай только на русском языке.")
             if (chunks.isNotEmpty()) {
                 val context = chunks

@@ -13,7 +13,7 @@ class ChatTuningSettingsStore(context: Context) {
 
     fun load(): ChatTuningSettings = ChatTuningSettings(
         temperature = prefs.getFloat(KEY_TEMPERATURE, 0.2f).coerceIn(0f, 2f),
-        maxTokens = prefs.getInt(KEY_MAX_TOKENS, 96).coerceIn(16, 512),
+        maxTokens = prefs.getInt(KEY_MAX_TOKENS, 64).coerceIn(16, 512),
         systemPrompt = prefs.getString(KEY_SYSTEM_PROMPT, "").orEmpty()
     )
 

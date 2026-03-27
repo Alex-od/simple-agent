@@ -1,4 +1,4 @@
-﻿package com.danichapps.simpleagent.presentation
+package com.danichapps.simpleagent.presentation
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -41,6 +41,9 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -60,7 +63,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.danichapps.simpleagent.domain.model.ChatMode
 import com.danichapps.simpleagent.domain.model.ChatTuningSettings
+import com.danichapps.simpleagent.domain.model.LocalServerSettings
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.RagSource
 import kotlinx.coroutines.launch
@@ -76,15 +81,18 @@ fun ChatView(
     ragFolderName: String?,
     modelFileName: String?,
     embeddingModelFileName: String?,
-    isOfflineMode: Boolean,
+    chatMode: ChatMode,
     modelState: ModelState,
     chatTuningSettings: ChatTuningSettings,
+    localServerSettings: LocalServerSettings,
     onSendMessage: (String) -> Unit,
     onRagToggle: (Boolean) -> Unit,
-    onOfflineModeToggle: (Boolean) -> Unit,
+    onChatModeChange: (ChatMode) -> Unit,
     onTemperatureChange: (Float) -> Unit,
     onMaxTokensChange: (String) -> Unit,
     onSystemPromptChange: (String) -> Unit,
+    onServerUrlChange: (String) -> Unit,
+    onServerModelChange: (String) -> Unit,
     onPickRagFolder: () -> Unit,
     onPickModelFile: () -> Unit,
     onPickEmbeddingModelFile: () -> Unit
@@ -101,6 +109,34 @@ fun ChatView(
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.padding(16.dp)
                 )
+                HorizontalDivider()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = "Режим LLM",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        val options = listOf(
+                            ChatMode.OPENAI to "OpenAI",
+                            ChatMode.ON_DEVICE to "On-device",
+                            ChatMode.LOCAL_SERVER to "Local server"
+                        )
+                        options.forEachIndexed { index, (mode, label) ->
+                            SegmentedButton(
+                                selected = chatMode == mode,
+                                onClick = { onChatModeChange(mode) },
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size)
+                            ) {
+                                Text(label)
+                            }
+                        }
+                    }
+                }
                 HorizontalDivider()
                 ListItem(
                     headlineContent = { Text("Поиск по документам") },
@@ -128,37 +164,52 @@ fun ChatView(
                         }
                     }
                 )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Модель GGUF") },
-                    supportingContent = { Text(modelFileName ?: "Не выбрана") },
-                    trailingContent = {
-                        TextButton(onClick = onPickModelFile) {
-                            Text("Выбрать")
+                if (chatMode == ChatMode.ON_DEVICE) {
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text("Модель GGUF") },
+                        supportingContent = { Text(modelFileName ?: "Не выбрана") },
+                        trailingContent = {
+                            TextButton(onClick = onPickModelFile) {
+                                Text("Выбрать")
+                            }
                         }
-                    }
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Embedding GGUF") },
-                    supportingContent = { Text(embeddingModelFileName ?: "Не выбрана") },
-                    trailingContent = {
-                        TextButton(onClick = onPickEmbeddingModelFile) {
-                            Text("Выбрать")
+                    )
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text("Embedding GGUF") },
+                        supportingContent = { Text(embeddingModelFileName ?: "Не выбрана") },
+                        trailingContent = {
+                            TextButton(onClick = onPickEmbeddingModelFile) {
+                                Text("Выбрать")
+                            }
                         }
-                    }
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Офлайн-режим") },
-                    supportingContent = { Text("Локальная LLM на телефоне через llama.cpp") },
-                    trailingContent = {
-                        Switch(
-                            checked = isOfflineMode,
-                            onCheckedChange = onOfflineModeToggle
+                    )
+                }
+                if (chatMode == ChatMode.LOCAL_SERVER) {
+                    HorizontalDivider()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = localServerSettings.baseUrl,
+                            onValueChange = onServerUrlChange,
+                            label = { Text("Server URL") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = localServerSettings.model,
+                            onValueChange = onServerModelChange,
+                            label = { Text("Server model") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
-                )
+                }
                 HorizontalDivider()
                 Column(
                     modifier = Modifier
@@ -207,6 +258,8 @@ fun ChatView(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("AI Agent")
+                            Spacer(modifier = Modifier.width(8.dp))
+                            ModeBadge(chatMode = chatMode)
                             if (isRagEnabled) {
                                 Spacer(modifier = Modifier.width(8.dp))
                                 val ragBgColor = if (isRagIndexed) Color(0xFF388E3C) else MaterialTheme.colorScheme.tertiary
@@ -217,18 +270,6 @@ fun ChatView(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(ragBgColor)
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
-                            if (isOfflineMode) {
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "OFFLINE",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSecondary,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.secondary)
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
                             }
@@ -257,7 +298,11 @@ fun ChatView(
                     ) {
                         CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
                         Text(
-                            text = "Инициализация on-device llama.cpp...",
+                            text = when (chatMode) {
+                                ChatMode.ON_DEVICE -> "Инициализация on-device llama.cpp..."
+                                ChatMode.LOCAL_SERVER -> "Проверка Local server..."
+                                ChatMode.OPENAI -> "Подготовка режима OpenAI..."
+                            },
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -277,7 +322,7 @@ fun ChatView(
                 if (modelState is ModelState.Error) {
                     SelectionContainer {
                         Text(
-                            text = "Ошибка локальной модели: ${modelState.message}",
+                            text = "Ошибка режима ${modeBadgeText(chatMode)}: ${modelState.message}",
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
@@ -298,6 +343,31 @@ fun ChatView(
             }
         }
     }
+}
+
+@Composable
+private fun ModeBadge(chatMode: ChatMode) {
+    val (label, background) = when (chatMode) {
+        ChatMode.OPENAI -> "OPENAI" to MaterialTheme.colorScheme.primary
+        ChatMode.ON_DEVICE -> "ON-DEVICE" to MaterialTheme.colorScheme.secondary
+        ChatMode.LOCAL_SERVER -> "SERVER" to MaterialTheme.colorScheme.tertiary
+    }
+
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall,
+        color = Color.White,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    )
+}
+
+private fun modeBadgeText(chatMode: ChatMode): String = when (chatMode) {
+    ChatMode.OPENAI -> "OpenAI"
+    ChatMode.ON_DEVICE -> "On-device"
+    ChatMode.LOCAL_SERVER -> "Local server"
 }
 
 @Composable

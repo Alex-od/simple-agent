@@ -3,12 +3,10 @@ package com.danichapps.simpleagent.data.remote
 import com.danichapps.simpleagent.data.remote.dto.ChatRequest
 import com.danichapps.simpleagent.data.remote.dto.ChatResponse
 import com.danichapps.simpleagent.data.remote.dto.MessageDto
-import com.danichapps.simpleagent.data.remote.dto.ModelsResponse
 import com.danichapps.simpleagent.data.remote.dto.ResponseFormat
 import com.danichapps.simpleagent.domain.model.ChatTuningSettings
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
@@ -16,38 +14,22 @@ import io.ktor.http.contentType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
-class LlamaCppService(
+class OpenAiCompatibleChatService(
     private val client: HttpClient,
-    private val baseUrl: String,
-    private val model: String
+    private val endpointProvider: () -> ChatEndpointConfig
 ) : ChatService {
-
-    suspend fun initialize() {
-        runCatching { client.get("$baseUrl/health") }
-        val models = client.get("$baseUrl/v1/models").body<ModelsResponse>()
-        val availableModels = models.data.map { it.id }
-        if (availableModels.isEmpty()) {
-            error("llama.cpp сервер не вернул список моделей по /v1/models")
-        }
-        if (model !in availableModels) {
-            error(
-                "Модель '$model' не найдена на llama.cpp сервере. Доступно: ${availableModels.joinToString()}"
-            )
-        }
-    }
-
-    fun release() = Unit
 
     override suspend fun sendMessages(
         messages: List<MessageDto>,
         jsonMode: Boolean,
         settings: ChatTuningSettings
     ): String {
-        val response: ChatResponse = client.post("$baseUrl/v1/chat/completions") {
+        val endpoint = endpointProvider()
+        val response: ChatResponse = client.post("${endpoint.baseUrl}/chat/completions") {
             contentType(ContentType.Application.Json)
             setBody(
                 ChatRequest(
-                    model = model,
+                    model = endpoint.model,
                     messages = messages,
                     temperature = settings.temperature,
                     maxTokens = settings.maxTokens,

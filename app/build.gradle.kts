@@ -35,6 +35,8 @@ android {
         buildConfigField("String", "ON_DEVICE_LLM_MODEL_PATH", "\"${localProps["ON_DEVICE_LLM_MODEL_PATH"] ?: ""}\"")
         buildConfigField("String", "LOCAL_EMBEDDING_MODEL_FILENAME", "\"${localProps["LOCAL_EMBEDDING_MODEL_FILENAME"] ?: ""}\"")
         buildConfigField("String", "LOCAL_EMBEDDING_MODEL_PATH", "\"${localProps["LOCAL_EMBEDDING_MODEL_PATH"] ?: ""}\"")
+        buildConfigField("String", "LOCAL_SERVER_BASE_URL", "\"${localProps["LOCAL_SERVER_BASE_URL"] ?: "http://10.0.2.2:8080/v1"}\"")
+        buildConfigField("String", "LOCAL_SERVER_MODEL", "\"${localProps["LOCAL_SERVER_MODEL"] ?: "Qwen2.5-3B-Instruct-Q4_K_M"}\"")
     }
 
     buildTypes {

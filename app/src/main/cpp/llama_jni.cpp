@@ -13,7 +13,9 @@
 namespace {
 
 constexpr const char * TAG = "simpleagent_llama";
-constexpr uint32_t DEFAULT_CONTEXT_SIZE = 2048;
+constexpr uint32_t MAX_CONTEXT_SIZE = 2048;
+constexpr uint32_t MIN_CONTEXT_SIZE = 256;
+constexpr uint32_t CONTEXT_GRANULARITY = 128;
 
 std::mutex g_mutex;
 llama_model * g_chat_model = nullptr;
@@ -127,6 +129,12 @@ void release_embedding_model_locked() {
     }
 }
 
+uint32_t tuned_context_size(uint32_t prompt_tokens, int max_tokens) {
+    const uint32_t required = prompt_tokens + static_cast<uint32_t>(std::max(32, max_tokens + 24));
+    const uint32_t rounded = ((required + CONTEXT_GRANULARITY - 1) / CONTEXT_GRANULARITY) * CONTEXT_GRANULARITY;
+    return std::max(MIN_CONTEXT_SIZE, std::min(MAX_CONTEXT_SIZE, rounded));
+}
+
 std::string generate_internal(const std::string & prompt, int max_tokens, float temperature) {
     if (g_chat_model == nullptr || g_chat_vocab == nullptr) {
         return "Model is not initialized";
@@ -148,10 +156,10 @@ std::string generate_internal(const std::string & prompt, int max_tokens, float 
     }
 
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = std::max<uint32_t>(DEFAULT_CONTEXT_SIZE, static_cast<uint32_t>(prompt_tokens.size() + max_tokens));
+    ctx_params.n_ctx = tuned_context_size(static_cast<uint32_t>(prompt_tokens.size()), max_tokens);
     ctx_params.n_batch = std::min<uint32_t>(
             ctx_params.n_ctx,
-            std::max<uint32_t>(32, std::min<uint32_t>(512, static_cast<uint32_t>(prompt_tokens.size()))));
+            std::max<uint32_t>(32, std::min<uint32_t>(192, static_cast<uint32_t>(prompt_tokens.size()))));
     ctx_params.n_ubatch = ctx_params.n_batch;
     ctx_params.n_threads = 4;
     ctx_params.n_threads_batch = 4;
