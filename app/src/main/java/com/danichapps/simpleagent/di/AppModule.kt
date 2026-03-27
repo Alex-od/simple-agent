@@ -8,6 +8,7 @@ import com.danichapps.simpleagent.data.local.LocalServerSettingsStore
 import com.danichapps.simpleagent.data.local.ModelSelectionManager
 import com.danichapps.simpleagent.data.remote.DeviceModelPathResolver
 import com.danichapps.simpleagent.data.remote.EmbeddingModelPathResolver
+import com.danichapps.simpleagent.data.remote.ChatService
 import com.danichapps.simpleagent.data.remote.LlamaCppEmbeddingService
 import com.danichapps.simpleagent.data.remote.LlamaCppNative
 import com.danichapps.simpleagent.data.remote.LocalServerProbe
@@ -86,7 +87,7 @@ val appModule = module {
 
     single { ChatModeStore(androidContext()) }
     single { LocalServerSettingsStore(androidContext()) }
-    single(named("openai_chat_service")) {
+    single<ChatService>(named("openai_chat_service")) {
         OpenAiCompatibleChatService(get(named("openai"))) {
             com.danichapps.simpleagent.data.remote.ChatEndpointConfig(
                 baseUrl = "https://api.openai.com/v1",
@@ -94,7 +95,7 @@ val appModule = module {
             )
         }
     }
-    single(named("local_server_chat_service")) {
+    single<ChatService>(named("local_server_chat_service")) {
         val settingsStore: LocalServerSettingsStore = get()
         OpenAiCompatibleChatService(get(named("local_server"))) {
             val settings = settingsStore.load()
