@@ -1,0 +1,38 @@
+server:
+  port: 8100
+
+spring:
+  datasource:
+    url: jdbc:h2:file:${user.home}/.simpleagent/data/db
+    driver-class-name: org.h2.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+rag:
+  files:
+    dir: ../rag_files
+    allowed-base-paths:
+      - ${user.home}
+      - ../rag_files
+      - C:/
+      - D:/
+      - E:/
+  auto-index: false
+
+ollama:
+  base-url: http://localhost:11434
+
+gguf:
+  scan-dir: ${user.home}/.simpleagent/models
+
+cors:
+  allowed-origins:
+    - http://localhost:3000
+    - http://localhost:8100
+    - http://localhost:5173
+
+simpleagent:
+  config-path: ${user.home}/.simpleagent/config.yml

@@ -1,10 +1,10 @@
 package com.danichapps.ragserver.service
 
 import com.danichapps.ragserver.model.SearchResult
+import com.danichapps.ragserver.rag.embedding.EmbeddingService
 import dev.langchain4j.data.document.Metadata
 import dev.langchain4j.data.embedding.Embedding
 import dev.langchain4j.data.segment.TextSegment
-import dev.langchain4j.model.embedding.onnx.allminilml6v2q.AllMiniLmL6V2QuantizedEmbeddingModel
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore
 import jakarta.annotation.PostConstruct
@@ -17,12 +17,13 @@ import java.io.FileInputStream
 
 @Service
 class RagService(
-    @Value("\${rag.files.dir}") private val filesDir: String
+    @Value("\${rag.files.dir}") private val filesDir: String,
+    @Value("\${rag.auto-index:false}") private val autoIndex: Boolean,
+    private val embeddingService: EmbeddingService
 ) {
 
     private val log = LoggerFactory.getLogger(RagService::class.java)
 
-    private val embeddingModel = AllMiniLmL6V2QuantizedEmbeddingModel()
     private val embeddingStore = InMemoryEmbeddingStore<TextSegment>()
 
     private var indexedFilesCount = 0
@@ -36,32 +37,56 @@ class RagService(
 
     @PostConstruct
     fun init() {
-        val dir = File(filesDir)
-        if (!dir.exists() || !dir.isDirectory) {
-            log.warn("Папка RAG-файлов не найдена: {}. Сервер запустится без проиндексированных документов.", dir.absolutePath)
+        if (!autoIndex) {
+            log.info("Автоматическая индексация отключена (rag.auto-index=false)")
             return
+        }
+        val dir = File(filesDir)
+        indexDirectory(dir)
+    }
+
+    fun indexDirectory(dir: File): IndexingCallback {
+        val callback = IndexingCallback()
+
+        if (!dir.exists() || !dir.isDirectory) {
+            log.warn("Папка RAG-файлов не найдена: {}. Индексация пропущена.", dir.absolutePath)
+            return callback
         }
 
         val docxFiles = dir.listFiles { file -> file.extension.equals("docx", ignoreCase = true) } ?: emptyArray()
 
         if (docxFiles.isEmpty()) {
             log.warn("Файлы .docx не найдены в {}", dir.absolutePath)
-            return
+            return callback
         }
 
+        callback.totalFiles = docxFiles.size
         log.info("Найдено {} .docx файл(ов) в {}. Начинаю индексацию...", docxFiles.size, dir.absolutePath)
 
         for (file in docxFiles) {
             try {
+                callback.currentFile = file.name
                 indexFile(file)
                 indexedFilesCount++
+                callback.processedFiles++
             } catch (e: Exception) {
                 log.error("Ошибка индексации файла: {}", file.name, e)
             }
         }
 
+        callback.totalChunks = totalChunksCount
         log.info("Индексация завершена. Файлов: {}, чанков: {}", indexedFilesCount, totalChunksCount)
+        return callback
     }
+
+    fun clearStore() {
+        embeddingStore.removeAll()
+        indexedFilesCount = 0
+        totalChunksCount = 0
+        log.info("Embedding store очищен")
+    }
+
+    fun getChunkCount(): Int = totalChunksCount
 
     private fun indexFile(file: File) {
         log.info("Индексирую файл: {}", file.name)
@@ -79,7 +104,7 @@ class RagService(
                 chunk,
                 Metadata.from(mapOf("source_file" to file.name, "chunk_index" to index.toString()))
             )
-            val embedding: Embedding = embeddingModel.embed(segment).content()
+            val embedding: Embedding = embeddingService.embed(segment)
             embeddingStore.add(embedding, segment)
             totalChunksCount++
         }
@@ -120,7 +145,7 @@ class RagService(
 
     fun search(query: String, topK: Int): List<SearchResult> {
         return try {
-            val queryEmbedding: Embedding = embeddingModel.embed(query).content()
+            val queryEmbedding: Embedding = embeddingService.embed(query)
             val request = EmbeddingSearchRequest.builder()
                 .queryEmbedding(queryEmbedding)
                 .maxResults(topK)
@@ -136,11 +161,18 @@ class RagService(
                 )
             }
         } catch (e: Exception) {
-            log.error("Ошибка поиска для запроса: {}", query, e)
+            log.error("Ошибка поиска, queryLength={}", query.length, e)
             emptyList()
         }
     }
 
     fun getIndexedFilesCount(): Int = indexedFilesCount
     fun getTotalChunksCount(): Int = totalChunksCount
+
+    data class IndexingCallback(
+        var totalFiles: Int = 0,
+        var processedFiles: Int = 0,
+        var currentFile: String? = null,
+        var totalChunks: Int = 0
+    )
 }
