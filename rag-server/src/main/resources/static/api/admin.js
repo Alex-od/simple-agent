@@ -36,12 +36,28 @@ export const adminApi = {
     return request('PUT', '/api/v1/admin/llm/active', { modelId })
   },
 
+  getLlmModelsPath() {
+    return request('GET', '/api/v1/admin/llm/models-path')
+  },
+
+  setLlmModelsPath(path) {
+    return request('PUT', '/api/v1/admin/llm/models-path', { path: path.replace(/\\/g, '/') })
+  },
+
   getEmbeddingModels() {
     return request('GET', '/api/v1/admin/embedding/models')
   },
 
   setActiveEmbedding(modelId, confirmReindex) {
     return request('PUT', '/api/v1/admin/embedding/active', { modelId, confirmReindex })
+  },
+
+  getEmbeddingModelsPath() {
+    return request('GET', '/api/v1/admin/embedding/models-path')
+  },
+
+  setEmbeddingModelsPath(path) {
+    return request('PUT', '/api/v1/admin/embedding/models-path', { path: path.replace(/\\/g, '/') })
   },
 
   getDocumentsPath() {

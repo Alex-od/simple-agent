@@ -1,7 +1,9 @@
 package com.danichapps.ragserver.admin
 
 import com.danichapps.ragserver.admin.dto.EmbeddingModelsResponse
+import com.danichapps.ragserver.admin.dto.ModelsPathResponse
 import com.danichapps.ragserver.admin.dto.SetActiveEmbeddingRequest
+import com.danichapps.ragserver.admin.dto.SetModelsPathRequest
 import com.danichapps.ragserver.rag.embedding.EmbeddingService
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
@@ -28,6 +30,17 @@ class AdminEmbeddingController(
     @PutMapping("/active")
     fun setActive(@RequestBody @Valid request: SetActiveEmbeddingRequest): ResponseEntity<Void> {
         embeddingService.switchModel(request.modelId, request.confirmReindex)
+        return ResponseEntity.ok().build()
+    }
+
+    @GetMapping("/models-path")
+    fun getModelsPath(): ModelsPathResponse {
+        return ModelsPathResponse(path = embeddingService.getModelsPath())
+    }
+
+    @PutMapping("/models-path")
+    fun setModelsPath(@RequestBody @Valid request: SetModelsPathRequest): ResponseEntity<Void> {
+        embeddingService.setModelsPath(request.path.replace('\\', '/'))
         return ResponseEntity.ok().build()
     }
 }

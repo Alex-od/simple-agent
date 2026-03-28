@@ -30,8 +30,15 @@ class LlmService(
         log.info("Активная LLM модель установлена: {}", modelName)
     }
 
+    fun getModelsPath(): String = configService.getGgufScanDir() ?: ggufScanDir
+
+    fun setModelsPath(path: String) {
+        configService.setGgufScanDir(path)
+        log.info("Путь к GGUF моделям установлен: {}", path)
+    }
+
     private fun scanGgufModels(activeName: String?): List<LlmModelInfo> {
-        val dir = File(ggufScanDir)
+        val dir = File(getModelsPath())
         if (!dir.exists() || !dir.isDirectory) return emptyList()
 
         val ggufFiles = dir.listFiles { file -> file.extension.equals("gguf", ignoreCase = true) }

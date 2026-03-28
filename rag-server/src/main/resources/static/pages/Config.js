@@ -18,6 +18,15 @@ export default {
           :loading="llmLoading"
           @select="onSelectLlm"
         />
+        <div class="form-group" style="margin-top: 12px;">
+          <label>Путь к LLM моделям (.gguf)</label>
+          <div style="display: flex; gap: 8px;">
+            <input class="input" v-model="llmModelsPath" style="flex: 1;" placeholder="Путь к директории с .gguf файлами" />
+            <button class="btn btn-primary btn-sm" @click="saveLlmModelsPath" :disabled="llmPathSaving">
+              Сохранить
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="section">
@@ -29,6 +38,15 @@ export default {
           :loading="embeddingLoading"
           @select="onSelectEmbedding"
         />
+        <div class="form-group" style="margin-top: 12px;">
+          <label>Путь к Embedding моделям</label>
+          <div style="display: flex; gap: 8px;">
+            <input class="input" v-model="embeddingModelsPath" style="flex: 1;" placeholder="Путь к директории с embedding моделями" />
+            <button class="btn btn-primary btn-sm" @click="saveEmbeddingModelsPath" :disabled="embeddingPathSaving">
+              Сохранить
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="section">
@@ -59,6 +77,12 @@ export default {
     const activeEmbedding = ref('')
     const embeddingLoading = ref(false)
 
+    const llmModelsPath = ref('')
+    const llmPathSaving = ref(false)
+
+    const embeddingModelsPath = ref('')
+    const embeddingPathSaving = ref(false)
+
     const docsPath = ref('')
     const docsInfo = ref(null)
     const pathSaving = ref(false)
@@ -73,6 +97,28 @@ export default {
       }
     }
 
+    async function loadLlmModelsPath() {
+      try {
+        const data = await adminApi.getLlmModelsPath()
+        llmModelsPath.value = data?.path || ''
+      } catch (e) {
+        addToast('Ошибка загрузки пути LLM моделей: ' + e.message, 'error')
+      }
+    }
+
+    async function saveLlmModelsPath() {
+      llmPathSaving.value = true
+      try {
+        await adminApi.setLlmModelsPath(llmModelsPath.value)
+        addToast('Путь к LLM моделям сохранён', 'success')
+        await loadLlm()
+      } catch (e) {
+        addToast('Ошибка сохранения пути LLM: ' + e.message, 'error')
+      } finally {
+        llmPathSaving.value = false
+      }
+    }
+
     async function loadEmbedding() {
       try {
         const data = await adminApi.getEmbeddingModels()
@@ -80,6 +126,27 @@ export default {
         activeEmbedding.value = data.active || ''
       } catch (e) {
         addToast('Ошибка загрузки Embedding моделей: ' + e.message, 'error')
+      }
+    }
+
+    async function loadEmbeddingModelsPath() {
+      try {
+        const data = await adminApi.getEmbeddingModelsPath()
+        embeddingModelsPath.value = data?.path || ''
+      } catch (e) {
+        addToast('Ошибка загрузки пути Embedding моделей: ' + e.message, 'error')
+      }
+    }
+
+    async function saveEmbeddingModelsPath() {
+      embeddingPathSaving.value = true
+      try {
+        await adminApi.setEmbeddingModelsPath(embeddingModelsPath.value)
+        addToast('Путь к Embedding моделям сохранён', 'success')
+      } catch (e) {
+        addToast('Ошибка сохранения пути Embedding: ' + e.message, 'error')
+      } finally {
+        embeddingPathSaving.value = false
       }
     }
 
@@ -141,15 +208,21 @@ export default {
 
     onMounted(() => {
       loadLlm()
+      loadLlmModelsPath()
       loadEmbedding()
+      loadEmbeddingModelsPath()
       loadDocsPath()
     })
 
     return {
       llmModels, activeLlm, llmLoading,
+      llmModelsPath, llmPathSaving,
       embeddingModels, activeEmbedding, embeddingLoading,
+      embeddingModelsPath, embeddingPathSaving,
       docsPath, docsInfo, pathSaving,
-      onSelectLlm, onSelectEmbedding, savePath, formatBytes,
+      onSelectLlm, onSelectEmbedding,
+      saveLlmModelsPath, saveEmbeddingModelsPath,
+      savePath, formatBytes,
     }
   },
 }
