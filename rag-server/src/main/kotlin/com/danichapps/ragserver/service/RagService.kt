@@ -6,7 +6,10 @@ import dev.langchain4j.data.document.Metadata
 import dev.langchain4j.data.embedding.Embedding
 import dev.langchain4j.data.segment.TextSegment
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest
-import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore
+import dev.langchain4j.store.embedding.qdrant.QdrantEmbeddingStore
+import io.qdrant.client.QdrantClient
+import io.qdrant.client.grpc.Collections.Distance
+import io.qdrant.client.grpc.Collections.VectorParams
 import jakarta.annotation.PostConstruct
 import org.apache.poi.xwpf.usermodel.XWPFDocument
 import org.slf4j.LoggerFactory
@@ -19,12 +22,14 @@ import java.io.FileInputStream
 class RagService(
     @Value("\${rag.files.dir}") private val filesDir: String,
     @Value("\${rag.auto-index:false}") private val autoIndex: Boolean,
-    private val embeddingService: EmbeddingService
+    @Value("\${qdrant.collection-name}") private val collectionName: String,
+    @Value("\${qdrant.vector-size}") private val vectorSize: Long,
+    private val embeddingService: EmbeddingService,
+    private val embeddingStore: QdrantEmbeddingStore,
+    private val qdrantClient: QdrantClient
 ) {
 
     private val log = LoggerFactory.getLogger(RagService::class.java)
-
-    private val embeddingStore = InMemoryEmbeddingStore<TextSegment>()
 
     private var indexedFilesCount = 0
     private var totalChunksCount = 0
@@ -80,13 +85,44 @@ class RagService(
     }
 
     fun clearStore() {
-        embeddingStore.removeAll()
+        try {
+            qdrantClient.deleteCollectionAsync(collectionName).get()
+            log.info("Коллекция Qdrant удалена: {}", collectionName)
+        } catch (e: Exception) {
+            log.info("Коллекция {} не существует, создаю новую", collectionName)
+        }
+        qdrantClient.createCollectionAsync(
+            collectionName,
+            VectorParams.newBuilder()
+                .setSize(vectorSize)
+                .setDistance(Distance.Cosine)
+                .build()
+        ).get()
         indexedFilesCount = 0
         totalChunksCount = 0
-        log.info("Embedding store очищен")
+        log.info("Коллекция Qdrant пересоздана (очищена): {}", collectionName)
     }
 
     fun getChunkCount(): Int = totalChunksCount
+
+    fun getRealChunkCount(): Long {
+        return try {
+            val info = qdrantClient.getCollectionInfoAsync(collectionName).get()
+            info.vectorsCount
+        } catch (e: Exception) {
+            log.warn("Не удалось получить кол-во векторов из Qdrant: {}", e.message)
+            totalChunksCount.toLong()
+        }
+    }
+
+    fun isQdrantConnected(): Boolean {
+        return try {
+            qdrantClient.listCollectionsAsync().get()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     private fun indexFile(file: File) {
         log.info("Индексирую файл: {}", file.name)

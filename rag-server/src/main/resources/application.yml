@@ -22,6 +22,12 @@ rag:
       - E:/
   auto-index: false
 
+qdrant:
+  host: localhost
+  port: 6334
+  collection-name: rag-documents
+  vector-size: 384
+
 ollama:
   base-url: http://localhost:11434
 

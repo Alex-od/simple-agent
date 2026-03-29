@@ -12,6 +12,9 @@ data class SystemStatusResponse(
 
 data class RagStatus(
     val documentsPath: String?,
-    val indexedChunks: Int,
-    val indexingStatus: String
+    val indexedChunks: Long,
+    val indexingStatus: String,
+    val qdrantConnected: Boolean,
+    val qdrantCollection: String,
+    val qdrantEndpoint: String
 )

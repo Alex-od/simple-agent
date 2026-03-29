@@ -3,7 +3,9 @@ package com.danichapps.ragserver.rag.embedding
 import com.danichapps.ragserver.common.exception.ApiException
 import com.danichapps.ragserver.config.ConfigService
 import dev.langchain4j.data.embedding.Embedding
+import dev.langchain4j.data.segment.TextSegment
 import dev.langchain4j.model.embedding.onnx.allminilml6v2q.AllMiniLmL6V2QuantizedEmbeddingModel
+import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
@@ -20,8 +22,15 @@ class EmbeddingService(
     private val embeddingModel = AtomicReference(AllMiniLmL6V2QuantizedEmbeddingModel())
     private val currentModelName = AtomicReference("all-minilm-l6-v2")
 
+    @PostConstruct
+    fun warmUp() {
+        log.info("Прогрев embedding модели...")
+        val result = embeddingModel.get().embed(TextSegment.from("warmup")).content()
+        log.info("Embedding модель готова, размер вектора: {}", result.vectorAsList().size)
+    }
+
     fun embed(text: String): Embedding {
-        return embeddingModel.get().embed(text).content()
+        return embeddingModel.get().embed(TextSegment.from(text)).content()
     }
 
     fun embed(segment: dev.langchain4j.data.segment.TextSegment): Embedding {

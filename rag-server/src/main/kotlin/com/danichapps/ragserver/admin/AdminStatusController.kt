@@ -7,6 +7,7 @@ import com.danichapps.ragserver.llm.LlmService
 import com.danichapps.ragserver.rag.embedding.EmbeddingService
 import com.danichapps.ragserver.rag.indexing.IndexingService
 import com.danichapps.ragserver.service.RagService
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
@@ -18,7 +19,10 @@ class AdminStatusController(
     private val embeddingService: EmbeddingService,
     private val configService: ConfigService,
     private val indexingService: IndexingService,
-    private val ragService: RagService
+    private val ragService: RagService,
+    @Value("\${qdrant.host}") private val qdrantHost: String,
+    @Value("\${qdrant.port}") private val qdrantPort: Int,
+    @Value("\${qdrant.collection-name}") private val qdrantCollection: String
 ) {
 
     @GetMapping("/status")
@@ -30,8 +34,11 @@ class AdminStatusController(
             activeEmbedding = embeddingService.getModelName(),
             rag = RagStatus(
                 documentsPath = configService.getDocumentsPath(),
-                indexedChunks = ragService.getChunkCount(),
-                indexingStatus = indexingState.status.name
+                indexedChunks = ragService.getRealChunkCount(),
+                indexingStatus = indexingState.status.name,
+                qdrantConnected = ragService.isQdrantConnected(),
+                qdrantCollection = qdrantCollection,
+                qdrantEndpoint = "$qdrantHost:$qdrantPort"
             ),
             indexing = indexingState
         )

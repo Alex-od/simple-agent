@@ -35,6 +35,7 @@ dependencies {
     implementation("dev.langchain4j:langchain4j:0.36.2")
     implementation("dev.langchain4j:langchain4j-embeddings-all-minilm-l6-v2-q:0.36.2")
     implementation("dev.langchain4j:langchain4j-ollama:0.36.2")
+    implementation("dev.langchain4j:langchain4j-qdrant:0.36.2")
 
     // Apache POI for .docx
     implementation("org.apache.poi:poi-ooxml:5.3.0")

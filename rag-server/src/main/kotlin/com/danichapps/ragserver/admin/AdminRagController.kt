@@ -9,9 +9,11 @@ import com.danichapps.ragserver.config.ConfigService
 import com.danichapps.ragserver.config.RagFilesProperties
 import com.danichapps.ragserver.rag.indexing.IndexingService
 import com.danichapps.ragserver.rag.indexing.IndexingState
+import com.danichapps.ragserver.service.RagService
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
@@ -25,7 +27,8 @@ import java.io.File
 class AdminRagController(
     private val configService: ConfigService,
     private val indexingService: IndexingService,
-    private val ragFilesProperties: RagFilesProperties
+    private val ragFilesProperties: RagFilesProperties,
+    private val ragService: RagService
 ) {
 
     @GetMapping("/documents-path")
@@ -67,5 +70,11 @@ class AdminRagController(
     @GetMapping("/indexing/status")
     fun getIndexingStatus(): IndexingState {
         return indexingService.getState()
+    }
+
+    @DeleteMapping("/index")
+    fun clearIndex(): ResponseEntity<Void> {
+        ragService.clearStore()
+        return ResponseEntity.noContent().build()
     }
 }
