@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -39,6 +41,9 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -68,12 +73,19 @@ fun ChatView(
     error: String?,
     isRagEnabled: Boolean,
     isOfflineMode: Boolean,
+    maxTokens: Int?,
     onSendMessage: (String) -> Unit,
     onRagToggle: (Boolean) -> Unit,
-    onOfflineModeToggle: (Boolean) -> Unit
+    onOfflineModeToggle: (Boolean) -> Unit,
+    onMaxTokensChange: (Int?) -> Unit
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(error) {
+        if (error != null) snackbarHostState.showSnackbar(error)
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -112,10 +124,30 @@ fun ChatView(
                         )
                     }
                 )
+                HorizontalDivider()
+                var maxTokensText by remember(maxTokens) {
+                    mutableStateOf(maxTokens?.toString() ?: "")
+                }
+                ListItem(
+                    headlineContent = {
+                        OutlinedTextField(
+                            value = maxTokensText,
+                            onValueChange = { raw ->
+                                maxTokensText = raw.filter { it.isDigit() }
+                                onMaxTokensChange(maxTokensText.toIntOrNull())
+                            },
+                            label = { Text("Max tokens") },
+                            placeholder = { Text("По умолчанию") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                    }
+                )
             }
         }
     ) {
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 CenterAlignedTopAppBar(
                     navigationIcon = {
@@ -168,16 +200,6 @@ fun ChatView(
                     isLoading = isLoading,
                     modifier = Modifier.weight(1f)
                 )
-                if (error != null) {
-                    SelectionContainer {
-                        Text(
-                            text = error,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                        )
-                    }
-                }
                 InputBar(isLoading = isLoading, onSend = onSendMessage)
             }
         }

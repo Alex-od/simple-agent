@@ -18,6 +18,9 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
+import com.danichapps.simpleagent.data.AppPreferences
+import com.danichapps.simpleagent.data.remote.FileLogger
+import org.koin.android.ext.koin.androidContext
 import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
@@ -29,10 +32,16 @@ private const val OPENAI_TIMEOUT_MS = 120_000L
 
 val appModule = module {
 
+    single { AppPreferences(androidContext()) }
+    single { FileLogger(androidContext()) }
+
     single(named("openai")) {
         HttpClient(OkHttp) {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
-            install(Logging) { level = LogLevel.BODY }
+            install(Logging) {
+                logger = get<FileLogger>()
+                level = LogLevel.BODY
+            }
             install(HttpTimeout) {
                 requestTimeoutMillis = OPENAI_TIMEOUT_MS
                 socketTimeoutMillis = OPENAI_TIMEOUT_MS
@@ -47,7 +56,10 @@ val appModule = module {
     single(named("rag")) {
         HttpClient(OkHttp) {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
-            install(Logging) { level = LogLevel.BODY }
+            install(Logging) {
+                logger = get<FileLogger>()
+                level = LogLevel.BODY
+            }
             install(HttpTimeout) {
                 requestTimeoutMillis = OPENAI_TIMEOUT_MS
                 socketTimeoutMillis = OPENAI_TIMEOUT_MS
@@ -65,5 +77,5 @@ val appModule = module {
 
     single { SendMessageUseCase(get()) }
     single { ExtractTaskStateUseCase() }
-    viewModel { ChatViewModel(get(named("openai")), get(named("ollama")), get(), get()) }
+    viewModel { ChatViewModel(get(named("openai")), get(named("ollama")), get(), get(), get()) }
 }

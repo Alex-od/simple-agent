@@ -10,25 +10,21 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 
-private const val RAG_BASE_URL = "http://192.168.0.102:8100"
+private const val RAG_BASE_URL = "http://$SERVER_HOST:8100"
 
 class RagService(private val client: HttpClient) {
 
     suspend fun search(query: String, topK: Int = 3): List<RagChunk> {
-        return try {
-            val response: RagSearchResponse = client.post("$RAG_BASE_URL/search") {
-                contentType(ContentType.Application.Json)
-                setBody(RagSearchRequest(query = query, topK = topK))
-            }.body()
-            response.results.map { result ->
-                RagChunk(
-                    source = result.sourceFile,
-                    chunkIndex = result.chunkIndex,
-                    text = result.text
-                )
-            }
-        } catch (e: Exception) {
-            emptyList()
+        val response: RagSearchResponse = client.post("$RAG_BASE_URL/api/v1/chat/rag/search") {
+            contentType(ContentType.Application.Json)
+            setBody(RagSearchRequest(query = query, topK = topK))
+        }.body()
+        return response.results.map { result ->
+            RagChunk(
+                source = result.sourceFile,
+                chunkIndex = result.chunkIndex,
+                text = result.text
+            )
         }
     }
 }

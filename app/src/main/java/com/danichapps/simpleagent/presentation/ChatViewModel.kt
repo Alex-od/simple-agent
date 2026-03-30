@@ -2,6 +2,7 @@ package com.danichapps.simpleagent.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.danichapps.simpleagent.data.AppPreferences
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.TaskState
 import com.danichapps.simpleagent.domain.repository.ChatRepository
@@ -18,7 +19,8 @@ class ChatViewModel(
     private val openAiChatRepo: ChatRepository,
     private val ollamaChatRepo: ChatRepository,
     private val sendMessageUseCase: SendMessageUseCase,
-    private val extractTaskStateUseCase: ExtractTaskStateUseCase
+    private val extractTaskStateUseCase: ExtractTaskStateUseCase,
+    private val prefs: AppPreferences
 ) : ViewModel() {
 
     private val _taskState = MutableStateFlow(TaskState())
@@ -32,18 +34,27 @@ class ChatViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private val _isRagEnabled = MutableStateFlow(false)
+    private val _isRagEnabled = MutableStateFlow(prefs.isRagEnabled)
     val isRagEnabled: StateFlow<Boolean> = _isRagEnabled.asStateFlow()
 
-    private val _isOfflineMode = MutableStateFlow(false)
+    private val _isOfflineMode = MutableStateFlow(prefs.isOfflineMode)
     val isOfflineMode: StateFlow<Boolean> = _isOfflineMode.asStateFlow()
+
+    private val _maxTokens = MutableStateFlow<Int?>(null)
+    val maxTokens: StateFlow<Int?> = _maxTokens.asStateFlow()
 
     fun toggleRag(enabled: Boolean) {
         _isRagEnabled.value = enabled
+        prefs.isRagEnabled = enabled
     }
 
     fun toggleOfflineMode(enabled: Boolean) {
         _isOfflineMode.value = enabled
+        prefs.isOfflineMode = enabled
+    }
+
+    fun setMaxTokens(value: Int?) {
+        _maxTokens.value = value
     }
 
     fun sendMessage(text: String) {
@@ -60,7 +71,8 @@ class ChatViewModel(
                     historyWithUser,
                     chatRepository = activeChatRepo,
                     ragEnabled = _isRagEnabled.value,
-                    taskState = _taskState.value
+                    taskState = _taskState.value,
+                    maxTokens = _maxTokens.value
                 )
                 val updatedHistory = (historyWithUser + Message(role = "assistant", content = answer, sources = sources))
                     .takeLast(MAX_HISTORY)
