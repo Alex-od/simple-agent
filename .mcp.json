@@ -3,6 +3,10 @@
     "mobile": {
       "command": "npx",
       "args": ["-y", "@mobilenext/mobile-mcp@latest"]
+    },
+    "simpleagent-project": {
+      "command": "python",
+      "args": ["tools/project_mcp_server.py"]
     }
   }
 }

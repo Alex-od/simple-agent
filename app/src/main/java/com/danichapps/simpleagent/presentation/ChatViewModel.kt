@@ -1,11 +1,14 @@
 package com.danichapps.simpleagent.presentation
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.danichapps.simpleagent.data.AppPreferences
 import com.danichapps.simpleagent.domain.model.Message
+import com.danichapps.simpleagent.domain.model.RoutedChatCommand
 import com.danichapps.simpleagent.domain.model.TaskState
 import com.danichapps.simpleagent.domain.repository.ChatRepository
+import com.danichapps.simpleagent.domain.usecase.CommandRouterUseCase
 import com.danichapps.simpleagent.domain.usecase.ExtractTaskStateUseCase
 import com.danichapps.simpleagent.domain.usecase.SendMessageUseCase
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +21,7 @@ private const val MAX_HISTORY = 20
 class ChatViewModel(
     private val openAiChatRepo: ChatRepository,
     private val ollamaChatRepo: ChatRepository,
+    private val commandRouterUseCase: CommandRouterUseCase,
     private val sendMessageUseCase: SendMessageUseCase,
     private val extractTaskStateUseCase: ExtractTaskStateUseCase,
     private val prefs: AppPreferences
@@ -58,7 +62,10 @@ class ChatViewModel(
     }
 
     fun sendMessage(text: String) {
-        if (text.isBlank() || _isLoading.value) return
+        if (text.isBlank() || _isLoading.value) {
+            return
+        }
+
         viewModelScope.launch {
             val userMsg = Message(role = "user", content = text)
             val historyWithUser = (_messages.value + userMsg).takeLast(MAX_HISTORY)
@@ -66,21 +73,49 @@ class ChatViewModel(
             _isLoading.value = true
             _error.value = null
             val activeChatRepo = if (_isOfflineMode.value) ollamaChatRepo else openAiChatRepo
+
             try {
-                val (answer, sources) = sendMessageUseCase(
-                    historyWithUser,
-                    chatRepository = activeChatRepo,
+                val routedCommand = commandRouterUseCase.execute(
+                    rawInput = text,
+                    historyWithUser = historyWithUser,
                     ragEnabled = _isRagEnabled.value,
-                    taskState = _taskState.value,
-                    maxTokens = _maxTokens.value
+                    taskState = _taskState.value
                 )
-                val updatedHistory = (historyWithUser + Message(role = "assistant", content = answer, sources = sources))
-                    .takeLast(MAX_HISTORY)
+
+                Log.d(
+                    "qqwe_tag CommandRouter",
+                    "route=${routedCommand::class.simpleName} rag=${_isRagEnabled.value} offline=${_isOfflineMode.value}"
+                )
+
+                val (answer, sources) = when (routedCommand) {
+                    is RoutedChatCommand.Default -> sendMessageUseCase(
+                        messages = routedCommand.messages,
+                        chatRepository = activeChatRepo,
+                        ragEnabled = routedCommand.ragEnabled,
+                        taskState = routedCommand.taskState,
+                        maxTokens = _maxTokens.value
+                    )
+
+                    is RoutedChatCommand.Prepared -> {
+                        val answer = activeChatRepo.sendMessages(
+                            routedCommand.prompt.messages,
+                            maxTokens = _maxTokens.value
+                        )
+                        answer to routedCommand.prompt.sources
+                    }
+                }
+
+                val updatedHistory = (
+                    historyWithUser + Message(role = "assistant", content = answer, sources = sources)
+                    ).takeLast(MAX_HISTORY)
                 _messages.value = updatedHistory
-                try {
-                    _taskState.value = extractTaskStateUseCase(updatedHistory, _taskState.value, activeChatRepo)
-                } catch (e: Exception) {
-                    // не мешаем основному флоу
+
+                if (routedCommand is RoutedChatCommand.Default) {
+                    try {
+                        _taskState.value = extractTaskStateUseCase(updatedHistory, _taskState.value, activeChatRepo)
+                    } catch (_: Exception) {
+                        // Keep the main chat flow alive even if task memory extraction fails.
+                    }
                 }
             } catch (e: Exception) {
                 _error.value = e.message ?: "Ошибка соединения"

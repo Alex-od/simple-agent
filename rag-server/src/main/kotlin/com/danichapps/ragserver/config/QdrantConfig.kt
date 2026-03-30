@@ -37,8 +37,7 @@ class QdrantConfig(
     @Bean
     fun qdrantEmbeddingStore(qdrantClient: QdrantClient): QdrantEmbeddingStore {
         return QdrantEmbeddingStore.builder()
-            .host(host)
-            .port(port)
+            .client(qdrantClient)
             .collectionName(collectionName)
             .build()
     }

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.slf4j.LoggerFactory
 import org.springframework.web.bind.annotation.RestController
 
 @RestController
@@ -25,6 +26,7 @@ class ChatController(
     private val ollamaClient: OllamaClient,
     private val embeddingService: EmbeddingService
 ) {
+    private val log = LoggerFactory.getLogger(ChatController::class.java)
 
     @PostMapping("/completions")
     fun completions(@RequestBody @Valid request: ChatCompletionRequest): ChatCompletionResponse {
@@ -57,7 +59,9 @@ class ChatController(
 
     @PostMapping("/rag/search")
     fun ragSearch(@RequestBody @Valid request: SearchRequest): SearchResponse {
+        log.info("RAG search: query='{}', topK={}", request.query, request.topK)
         val results = ragService.search(request.query, request.topK)
+        log.info("RAG search: returned {} results", results.size)
         return SearchResponse(results = results)
     }
 

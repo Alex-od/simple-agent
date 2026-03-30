@@ -33,7 +33,7 @@ class AdminRagController(
 
     @GetMapping("/documents-path")
     fun getDocumentsPath(): DocumentsPathResponse {
-        val path = configService.getDocumentsPath()
+        val path = configService.getDocumentsPath() ?: File(ragFilesProperties.dir).absolutePath
         val dir = path?.let { File(it) }
         val files = dir?.listFiles() ?: emptyArray()
         return DocumentsPathResponse(
@@ -56,8 +56,7 @@ class AdminRagController(
 
     @PostMapping("/indexing")
     fun startIndexing(@RequestBody(required = false) request: IndexingRequest?): ResponseEntity<IndexingState> {
-        val documentsPath = configService.getDocumentsPath()
-            ?: throw ApiException.ValidationException("Documents path is not configured. Set it via PUT /api/v1/admin/rag/documents-path first.")
+        val documentsPath = configService.getDocumentsPath() ?: File(ragFilesProperties.dir).absolutePath
 
         val started = indexingService.startIndexing(documentsPath)
         return if (started) {

@@ -24,3 +24,24 @@ replay_pid*.log
 # rag-server build artifacts
 rag-server/build/
 rag-server/.gradle/
+
+# app build artifacts
+app/build/
+*.apk
+
+# local debug/test artifacts
+.gradle-local/
+rag-server/server*.log
+server.log
+ragtest*.log
+latest_rag_chunks.json
+swarm-report/
+
+# local emulator/device dumps
+emu-*.png
+emu-*.xml
+simpleagent-*.png
+simpleagent-*.xml
+current*.xml
+after_*.xml
+ui_*.xml

@@ -8,7 +8,9 @@ data class ChatRequest(
     val model: String,
     val messages: List<MessageDto>,
     @SerialName("response_format")
-    val responseFormat: ResponseFormat? = null
+    val responseFormat: ResponseFormat? = null,
+    @SerialName("max_tokens")
+    val maxTokens: Int? = null
 )
 
 @Serializable

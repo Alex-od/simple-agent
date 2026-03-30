@@ -16,13 +16,14 @@ private const val MODEL = "gpt-4o-mini"
 
 class OpenAiService(private val client: HttpClient) : ChatService {
 
-    override suspend fun sendMessages(messages: List<MessageDto>, jsonMode: Boolean): String {
+    override suspend fun sendMessages(messages: List<MessageDto>, jsonMode: Boolean, maxTokens: Int?): String {
         val response: ChatResponse = client.post("$BASE_URL/chat/completions") {
             contentType(ContentType.Application.Json)
             setBody(ChatRequest(
                 model = MODEL,
                 messages = messages,
-                responseFormat = if (jsonMode) ResponseFormat("json_object") else null
+                responseFormat = if (jsonMode) ResponseFormat("json_object") else null,
+                maxTokens = maxTokens
             ))
         }.body()
         return response.choices.first().message.content

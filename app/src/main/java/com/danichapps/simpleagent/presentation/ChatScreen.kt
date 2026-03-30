@@ -12,6 +12,7 @@ fun ChatScreen(viewModel: ChatViewModel = koinViewModel()) {
     val error by viewModel.error.collectAsState()
     val isRagEnabled by viewModel.isRagEnabled.collectAsState()
     val isOfflineMode by viewModel.isOfflineMode.collectAsState()
+    val maxTokens by viewModel.maxTokens.collectAsState()
 
     ChatView(
         messages = messages,
@@ -19,8 +20,10 @@ fun ChatScreen(viewModel: ChatViewModel = koinViewModel()) {
         error = error,
         isRagEnabled = isRagEnabled,
         isOfflineMode = isOfflineMode,
+        maxTokens = maxTokens,
         onSendMessage = viewModel::sendMessage,
         onRagToggle = viewModel::toggleRag,
-        onOfflineModeToggle = viewModel::toggleOfflineMode
+        onOfflineModeToggle = viewModel::toggleOfflineMode,
+        onMaxTokensChange = viewModel::setMaxTokens
     )
 }

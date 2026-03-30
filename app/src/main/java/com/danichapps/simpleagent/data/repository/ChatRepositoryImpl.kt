@@ -9,8 +9,8 @@ class ChatRepositoryImpl(
     private val service: ChatService
 ) : ChatRepository {
 
-    override suspend fun sendMessages(messages: List<Message>, jsonMode: Boolean): String {
+    override suspend fun sendMessages(messages: List<Message>, jsonMode: Boolean, maxTokens: Int?): String {
         val dtos = messages.map { MessageDto(role = it.role, content = it.content) }
-        return service.sendMessages(dtos, jsonMode)
+        return service.sendMessages(dtos, jsonMode, maxTokens)
     }
 }
