@@ -45,3 +45,30 @@ simpleagent-*.xml
 current*.xml
 after_*.xml
 ui_*.xml
+
+# local IDE metadata
+.idea/misc.xml
+.idea/vcs.xml
+
+# local docs and dumps
+app_ui.xml
+error_screen.xml
+final-rag.xml
+focus.xml
+launch.xml
+menu.xml
+menu_new.xml
+menu_step3.xml
+mode.xml
+mode2.xml
+new_ui.xml
+post_wait.xml
+rag_on.xml
+simpleagent_launch.xml
+step2.xml
+text1.xml
+
+# local runtime/model assets
+llm/
+word/
+app/src/main/cpp/
