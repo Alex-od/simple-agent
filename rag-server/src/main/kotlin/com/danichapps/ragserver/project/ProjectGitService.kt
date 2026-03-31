@@ -56,8 +56,8 @@ class ProjectGitService(
             .redirectErrorStream(true)
             .start()
 
-        val completed = process.waitFor(10, TimeUnit.SECONDS)
         val output = process.inputStream.bufferedReader().use { it.readText() }
+        val completed = process.waitFor(30, TimeUnit.SECONDS)
         if (!completed) {
             process.destroyForcibly()
             log.warn("git.exe timed out for args={}", args.toList())
