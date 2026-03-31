@@ -15,12 +15,13 @@ class OllamaClient(
     private val log = LoggerFactory.getLogger(OllamaClient::class.java)
     private val webClient: WebClient = WebClient.builder().baseUrl(baseUrl).build()
 
-    fun chat(model: String, messages: List<Map<String, String>>): String {
-        val requestBody = mapOf(
-            "model" to model,
-            "messages" to messages,
-            "stream" to false
-        )
+    fun chat(model: String, messages: List<Map<String, String>>, format: String? = null): String {
+        val requestBody = buildMap {
+            put("model", model)
+            put("messages", messages)
+            put("stream", false)
+            if (format != null) put("format", format)
+        }
         val response = webClient.post()
             .uri("/api/chat")
             .header("Content-Type", "application/json")

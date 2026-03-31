@@ -5,7 +5,6 @@ import com.danichapps.ragserver.llm.OllamaClient
 import com.danichapps.ragserver.project.ProjectGitService
 import com.danichapps.ragserver.review.dto.PrReviewRequest
 import com.danichapps.ragserver.review.dto.PrReviewResponse
-import com.danichapps.ragserver.review.dto.ReviewFinding
 import com.danichapps.ragserver.service.RagService
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -24,17 +23,23 @@ class PrReviewService(
     private val objectMapper = jacksonObjectMapper()
 
     companion object {
-        private const val MAX_DIFF_CHARS = 24_000
+        private const val MAX_DIFF_CHARS = 6_000
         private const val DEFAULT_MODEL = "llama3.2:3b"
         private val CODE_EXTENSIONS = setOf("kt", "java", "yml", "gradle", "kts", "xml")
 
         private val SYSTEM_PROMPT = """
-            Ты — senior Kotlin/Android код-ревьюер. Анализируй PR diff и давай структурированную обратную связь.
-            Отвечай ТОЛЬКО валидным JSON без markdown-обёрток:
-            {"summary":"1-2 предложения","bugs":[...],"architecturalIssues":[...],"recommendations":[...]}
-            Каждый finding: {"severity":"critical|warning|info","file":"path или null","line":"ref или null","description":"описание"}
-            Фокус: null safety, утечки ресурсов, concurrency, lifecycle, архитектурные нарушения, безопасность.
-            НЕ комментируй стиль/форматирование. Только значимые находки. Пустая категория = пустой массив.
+            You are a Kotlin/Android code reviewer. Look at the git diff and fill in this JSON template.
+            Return ONLY the JSON, no other text.
+
+            Template (fill in the arrays with your findings, or leave empty):
+            {"summary":"one sentence about the changes","bugs":["[Foo.kt:42] possible NPE on x!!"],"architecturalIssues":["[Bar.kt] business logic belongs in use case, not ViewModel"],"recommendations":["[Baz.kt] extract duplicated validation into helper"]}
+
+            Rules:
+            - bugs: actual code errors (NPE, leaks, crashes, wrong coroutine scope)
+            - architecturalIssues: wrong layer (UI doing IO, data class with logic, etc.)
+            - recommendations: improvements, but not bugs
+            - Each item is a plain string like "[FileName.kt:line] description"
+            - Empty category = []
         """.trimIndent()
     }
 
@@ -57,9 +62,9 @@ class PrReviewService(
         val ragContext = if (request.useRag) {
             try {
                 val query = "$title ${files.joinToString(", ")}"
-                val results = ragService.search(query, request.topK)
+                val results = ragService.search(query, minOf(request.topK, 2))
                 log.info("qqwe_tag reviewPr RAG: query='{}', results={}", query, results.size)
-                results.joinToString("\n\n") { it.text }
+                results.joinToString("\n\n") { it.text }.take(500)
             } catch (e: Exception) {
                 log.warn("qqwe_tag reviewPr RAG search failed: {}", e.message)
                 ""
@@ -158,23 +163,22 @@ class PrReviewService(
         ragUsed: Boolean,
         model: String
     ): PrReviewResponse {
-        val cleaned = raw
-            .replace("```json", "").replace("```", "")
-            .trim()
+        val cleaned = raw.replace("```json", "").replace("```", "").trim()
+        val jsonStr = extractJsonObject(cleaned)
 
         return try {
-            val jsonNode = objectMapper.readTree(cleaned)
+            val jsonNode = objectMapper.readTree(jsonStr)
             PrReviewResponse(
-                summary = jsonNode.get("summary")?.asText() ?: raw,
-                bugs = parseFindings(jsonNode.get("bugs")),
-                architecturalIssues = parseFindings(jsonNode.get("architecturalIssues")),
-                recommendations = parseFindings(jsonNode.get("recommendations")),
+                summary = jsonNode.get("summary")?.asText() ?: "",
+                bugs = parseStringArray(jsonNode.get("bugs")),
+                architecturalIssues = parseStringArray(jsonNode.get("architecturalIssues")),
+                recommendations = parseStringArray(jsonNode.get("recommendations")),
                 branch = branch,
                 ragContextUsed = ragUsed,
                 model = model
             )
         } catch (e: Exception) {
-            log.warn("qqwe_tag reviewPr JSON parse failed, wrapping raw text: {}", e.message)
+            log.warn("qqwe_tag reviewPr JSON parse failed: {}", e.message)
             PrReviewResponse(
                 summary = raw,
                 branch = branch,
@@ -184,19 +188,24 @@ class PrReviewService(
         }
     }
 
-    private fun parseFindings(node: com.fasterxml.jackson.databind.JsonNode?): List<ReviewFinding> {
-        if (node == null || !node.isArray) return emptyList()
-        return node.mapNotNull { item ->
-            try {
-                ReviewFinding(
-                    severity = item.get("severity")?.asText() ?: "info",
-                    file = item.get("file")?.asText(),
-                    line = item.get("line")?.asText(),
-                    description = item.get("description")?.asText() ?: return@mapNotNull null
-                )
-            } catch (_: Exception) {
-                null
-            }
+    /** Находит первый JSON-объект в тексте, обрезанный JSON дополняет до валидного */
+    private fun extractJsonObject(text: String): String {
+        val start = text.indexOf('{')
+        if (start == -1) return text
+        var open = 0
+        val sb = StringBuilder()
+        for (ch in text.substring(start)) {
+            sb.append(ch)
+            if (ch == '{') open++
+            else if (ch == '}') { open--; if (open == 0) return sb.toString() }
         }
+        // JSON обрезан — закрываем незакрытые скобки
+        repeat(open) { sb.append('}') }
+        return sb.toString()
+    }
+
+    private fun parseStringArray(node: com.fasterxml.jackson.databind.JsonNode?): List<String> {
+        if (node == null || !node.isArray) return emptyList()
+        return node.mapNotNull { it.asText().takeIf { s -> s.isNotBlank() } }
     }
 }

@@ -2,7 +2,6 @@ package com.danichapps.simpleagent.domain.usecase
 
 import android.util.Log
 import com.danichapps.simpleagent.data.remote.ReviewService
-import com.danichapps.simpleagent.data.remote.dto.ReviewFindingDto
 import com.danichapps.simpleagent.data.remote.dto.ReviewResponseDto
 import com.danichapps.simpleagent.domain.model.Message
 import com.danichapps.simpleagent.domain.model.RoutedChatCommand
@@ -58,31 +57,19 @@ class CommandRouterUseCase(
         if (response.bugs.isNotEmpty()) {
             appendLine()
             appendLine("### Потенциальные баги")
-            response.bugs.forEach { appendLine(formatFinding(it)) }
+            response.bugs.forEach { appendLine("- $it") }
         }
 
         if (response.architecturalIssues.isNotEmpty()) {
             appendLine()
             appendLine("### Архитектурные проблемы")
-            response.architecturalIssues.forEach { appendLine(formatFinding(it)) }
+            response.architecturalIssues.forEach { appendLine("- $it") }
         }
 
         if (response.recommendations.isNotEmpty()) {
             appendLine()
             appendLine("### Рекомендации")
-            response.recommendations.forEach { appendLine(formatFinding(it)) }
+            response.recommendations.forEach { appendLine("- $it") }
         }
-    }
-
-    private fun formatFinding(finding: ReviewFindingDto): String {
-        val icon = when (finding.severity) {
-            "critical" -> "[critical]"
-            "warning" -> "[warning]"
-            else -> "[info]"
-        }
-        val location = listOfNotNull(finding.file, finding.line)
-            .joinToString(":")
-            .let { if (it.isNotBlank()) " (*$it*)" else "" }
-        return "- **$icon** ${finding.description}$location"
     }
 }
