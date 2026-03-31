@@ -35,6 +35,21 @@ class ProjectGitService(
             }
             .toList()
 
+    fun getDiff(baseBranch: String = "master"): String =
+        runGitCommand("diff", "$baseBranch...HEAD")
+
+    fun getDiffFileNames(baseBranch: String = "master"): List<String> =
+        runGitCommand("diff", "--name-only", "$baseBranch...HEAD")
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toList()
+
+    fun getLastCommitMessage(): String? =
+        runGitCommand("log", "-1", "--pretty=%s")
+            .trim()
+            .takeIf { it.isNotBlank() }
+
     private fun runGitCommand(vararg args: String): String {
         val process = ProcessBuilder(listOf("git.exe") + args)
             .directory(resolvedProjectRoot)

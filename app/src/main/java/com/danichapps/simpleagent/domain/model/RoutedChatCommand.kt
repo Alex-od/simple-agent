@@ -10,4 +10,8 @@ sealed interface RoutedChatCommand {
     data class Prepared(
         val prompt: PreparedPrompt
     ) : RoutedChatCommand
+
+    data class DirectResponse(
+        val content: String
+    ) : RoutedChatCommand
 }

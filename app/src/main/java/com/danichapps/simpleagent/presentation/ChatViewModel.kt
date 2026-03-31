@@ -103,6 +103,10 @@ class ChatViewModel(
                         )
                         answer to routedCommand.prompt.sources
                     }
+
+                    is RoutedChatCommand.DirectResponse -> {
+                        routedCommand.content to emptyList()
+                    }
                 }
 
                 val updatedHistory = (
