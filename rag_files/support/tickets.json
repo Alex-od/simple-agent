@@ -1,0 +1,59 @@
+{
+  "tickets": [
+    {
+      "id": "T-001",
+      "userId": "u1",
+      "userName": "Алексей",
+      "status": "open",
+      "category": "auth",
+      "subject": "Не работает вход через Google",
+      "description": "После обновления приложения до версии 1.2.3 перестал работать вход через Google. Появляется ошибка: 'Token invalid'. Пробовал переустановить приложение — не помогло.",
+      "appVersion": "1.2.3",
+      "createdAt": "2026-03-28"
+    },
+    {
+      "id": "T-002",
+      "userId": "u2",
+      "userName": "Мария",
+      "status": "open",
+      "category": "chat",
+      "subject": "Ассистент не отвечает на сообщения",
+      "description": "Отправляю сообщение в чат, индикатор загрузки крутится бесконечно. Ответа нет. Интернет работает. Используется модель llama3.2:3b.",
+      "appVersion": "1.2.3",
+      "createdAt": "2026-03-30"
+    },
+    {
+      "id": "T-003",
+      "userId": "u3",
+      "userName": "Дмитрий",
+      "status": "open",
+      "category": "rag",
+      "subject": "Команда /help не находит документацию",
+      "description": "Когда использую /help, ассистент отвечает что не знает о структуре проекта. RAG включён в настройках. Документы в папке docs/ есть.",
+      "appVersion": "1.2.2",
+      "createdAt": "2026-03-31"
+    },
+    {
+      "id": "T-004",
+      "userId": "u4",
+      "userName": "Елена",
+      "status": "closed",
+      "category": "review",
+      "subject": "/review возвращает пустой результат",
+      "description": "Команда /review не выдаёт никаких замечаний, хотя в PR есть изменения. Ветка: feature/new-ui.",
+      "appVersion": "1.2.3",
+      "createdAt": "2026-03-27"
+    },
+    {
+      "id": "T-005",
+      "userId": "u5",
+      "userName": "Игорь",
+      "status": "open",
+      "category": "connection",
+      "subject": "Ошибка подключения к серверу",
+      "description": "При запуске приложения вижу 'Connection refused'. Раньше всё работало. Сервер по адресу 192.168.0.102:8100.",
+      "appVersion": "1.2.3",
+      "createdAt": "2026-04-01"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ import com.danichapps.simpleagent.data.remote.OpenAiService
 import com.danichapps.simpleagent.data.remote.ProjectContextService
 import com.danichapps.simpleagent.data.remote.RagService
 import com.danichapps.simpleagent.data.remote.ReviewService
+import com.danichapps.simpleagent.data.remote.SupportService
 import com.danichapps.simpleagent.data.repository.ChatRepositoryImpl
 import com.danichapps.simpleagent.data.repository.ProjectContextRepositoryImpl
 import com.danichapps.simpleagent.data.repository.RagRepositoryImpl
@@ -92,6 +93,7 @@ val appModule = module {
 
     single { RagService(get(named("rag"))) }
     single { ReviewService(get(named("rag"))) }
+    single { SupportService(get(named("rag"))) }
     single { ProjectContextService(get(named("rag"))) }
 
     single<RagRepository> { RagRepositoryImpl(get()) }
@@ -99,7 +101,7 @@ val appModule = module {
 
     single { BuildHelpContextUseCase(get(), get()) }
     single { BuildHelpPromptUseCase() }
-    single { CommandRouterUseCase(get(), get(), get()) }
+    single { CommandRouterUseCase(get(), get(), get(), get()) }
     single { SendMessageUseCase(get()) }
     single { ExtractTaskStateUseCase() }
     viewModel { ChatViewModel(get(named("openai")), get(named("ollama")), get(), get(), get(), get()) }

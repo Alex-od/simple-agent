@@ -71,7 +71,45 @@ def run_git(*args: str) -> tuple[bool, str]:
     return completed.returncode == 0, output
 
 
+TICKETS_PATH = PROJECT_ROOT / "rag_files" / "support" / "tickets.json"
+
+
+def load_tickets() -> list[dict]:
+    try:
+        with open(TICKETS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("tickets", [])
+    except Exception as exc:
+        return []
+
+
 def handle_tool_call(name: str, arguments: dict) -> dict:
+    if name == "get_ticket":
+        ticket_id = arguments.get("ticket_id", "").strip()
+        tickets = load_tickets()
+        ticket = next((t for t in tickets if t.get("id") == ticket_id), None)
+        if ticket is None:
+            return make_text_result(
+                f"Ticket '{ticket_id}' not found.",
+                {"found": False, "ticketId": ticket_id},
+            )
+        text = (
+            f"Ticket {ticket['id']}: {ticket['subject']}\n"
+            f"User: {ticket['userName']} | Status: {ticket['status']} | Category: {ticket['category']}\n"
+            f"App version: {ticket['appVersion']} | Created: {ticket['createdAt']}\n"
+            f"Description: {ticket['description']}"
+        )
+        return make_text_result(text, {"found": True, "ticket": ticket})
+
+    if name == "list_tickets":
+        tickets = load_tickets()
+        if not tickets:
+            return make_text_result("No tickets found.", {"tickets": []})
+        lines = [f"{t['id']} [{t['status']}] {t['subject']} — {t['userName']}" for t in tickets]
+        text = "Support tickets:\n" + "\n".join(lines)
+        summary = [{"id": t["id"], "subject": t["subject"], "status": t["status"], "userName": t["userName"]} for t in tickets]
+        return make_text_result(text, {"tickets": summary})
+
     if name == "git_branch":
         ok, output = run_git("branch", "--show-current")
         branch = output if ok and output else "unknown"
@@ -100,6 +138,30 @@ def handle_tool_call(name: str, arguments: dict) -> dict:
 
 def tools_definition() -> list[dict]:
     return [
+        {
+            "name": "get_ticket",
+            "description": "Get a support ticket by ID from tickets.json.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ticket_id": {
+                        "type": "string",
+                        "description": "The ticket ID, e.g. T-001"
+                    }
+                },
+                "required": ["ticket_id"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "list_tickets",
+            "description": "List all support tickets (id, subject, status, userName).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
         {
             "name": "git_branch",
             "description": "Return the current git branch for the project.",
