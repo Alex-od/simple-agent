@@ -4,16 +4,20 @@ import com.danichapps.ragserver.files.dto.FilesRequest
 import com.danichapps.ragserver.files.dto.FilesResponse
 import com.danichapps.ragserver.llm.LlmService
 import com.danichapps.ragserver.llm.OllamaClient
+import com.fasterxml.jackson.databind.JsonNode
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import java.io.File
+import java.nio.file.FileSystems
+import java.nio.file.Paths
 
-private const val DEFAULT_MODEL = "llama3.2:3b"
-private const val MAX_FILE_CHARS = 3000
-private const val MAX_SEARCH_MATCHES = 40
+private const val DEFAULT_MODEL = "qwen2.5:7b"
+private const val MAX_ITERATIONS = 6
+private const val MAX_FILE_CHARS = 4000
+private const val MAX_SEARCH_MATCHES = 30
 private val EXCLUDED_DIRS = setOf("build", ".gradle", ".kotlin", ".git", "__pycache__", "node_modules")
-private val SOURCE_EXTENSIONS = setOf(".kt", ".py", ".java", ".xml", ".md", ".json", ".yml", ".yaml")
+private val SOURCE_EXTENSIONS = setOf("kt", "py", "java", "xml", "md", "json", "yml", "yaml")
 
 @Service
 class FilesService(
@@ -26,217 +30,272 @@ class FilesService(
     private val root: File = File(projectRoot).absoluteFile.normalize()
 
     fun analyze(request: FilesRequest): FilesResponse {
-        val task = request.task.trim()
-        val log2 = mutableListOf<String>()
         val model = llmService.getActiveName() ?: DEFAULT_MODEL
+        val opLog = mutableListOf<String>()
 
-        log.info("qqwe_tag FilesService analyze: task='{}', model={}", task, model)
+        log.info("qqwe_tag FilesService analyze: task='{}', model={}", request.task, model)
 
-        val result = when {
-            isSearchIntent(task) -> handleSearch(task, model, log2)
-            isGenerateIntent(task) -> handleGenerate(task, model, log2)
-            else -> handleGeneral(task, model, log2)
-        }
-
-        log.info(
-            "qqwe_tag FilesService analyze: done, ops={}, resultLen={}",
-            log2.size, result.length
+        val messages = mutableListOf<Map<String, Any>>(
+            mapOf("role" to "system", "content" to AGENT_SYSTEM_PROMPT),
+            mapOf("role" to "user", "content" to request.task)
         )
 
-        return FilesResponse(result = result, operationLog = log2, model = model)
-    }
+        var finalAnswer = ""
+        var iterations = 0
 
-    // ── Сценарий 1: Поиск usages ────────────────────────────────────────────
+        while (iterations < MAX_ITERATIONS) {
+            iterations++
+            log.debug("qqwe_tag FilesService, agentLoop: iteration={}", iterations)
 
-    private fun handleSearch(task: String, model: String, opLog: MutableList<String>): String {
-        val query = extractSearchQuery(task)
-        opLog.add("🔍 Поиск: \"$query\"")
+            val response = try {
+                ollamaClient.chatWithTools(model, messages, buildToolsDefinition())
+            } catch (e: Exception) {
+                log.warn("qqwe_tag FilesService, agentLoop: Ollama error: {}", e.message)
+                opLog.add("❌ Ошибка LLM: ${e.message?.take(80)}")
+                break
+            }
 
-        val matches = searchInFiles(query)
-        val matchCount = matches.size
-        val fileCount = matches.map { it.file }.distinct().size
+            if (!response.hasToolCalls) {
+                finalAnswer = response.content
+                log.info("qqwe_tag FilesService, agentLoop: final answer at iteration={}, len={}", iterations, finalAnswer.length)
+                break
+            }
 
-        opLog.add("📂 Найдено: $matchCount вхождений в $fileCount файл(ах)")
+            // Добавляем сообщение ассистента с tool_calls в историю
+            messages.add(
+                mapOf(
+                    "role" to "assistant",
+                    "content" to response.content,
+                    "tool_calls" to response.toolCalls.map { tc ->
+                        mapOf("function" to mapOf("name" to tc.name, "arguments" to tc.arguments))
+                    }
+                )
+            )
 
-        if (matches.isEmpty()) {
-            return "Вхождений для «$query» не найдено."
+            // Выполняем каждый tool call
+            for (toolCall in response.toolCalls) {
+                val toolName = toolCall.name
+                val args = toolCall.arguments
+                log.info("qqwe_tag FilesService, executeTool: name={}, args={}", toolName, args.toString().take(100))
+
+                val result = try {
+                    executeTool(toolName, args)
+                } catch (e: Exception) {
+                    "Tool error: ${e.message}"
+                }
+
+                val logEntry = "🔧 $toolName(${summarizeArgs(args)}) → ${result.take(60)}…"
+                opLog.add(logEntry)
+
+                messages.add(mapOf("role" to "tool", "content" to result))
+            }
         }
 
-        val context = matches.joinToString("\n") { "${it.file}:${it.line}: ${it.text}" }
-            .take(2000)
-
-        val prompt = buildString {
-            appendLine("Задача: $task")
-            appendLine()
-            appendLine("Найденные вхождения (файл:строка: код):")
-            appendLine(context)
-            appendLine()
-            appendLine("Проанализируй: где и как используется «$query», есть ли паттерны или проблемы.")
-            appendLine("Ответь на русском, кратко и структурировано.")
+        if (finalAnswer.isBlank() && iterations >= MAX_ITERATIONS) {
+            finalAnswer = "Достигнут лимит итераций ($MAX_ITERATIONS). Последний контекст:\n" +
+                messages.lastOrNull { it["role"] == "tool" }?.get("content")?.toString()?.take(500).orEmpty()
+            opLog.add("⚠️ Лимит итераций достигнут")
         }
 
-        return ollamaClient.chat(model, listOf(
-            mapOf("role" to "system", "content" to FILE_SYSTEM_PROMPT),
-            mapOf("role" to "user", "content" to prompt)
-        ))
+        log.info("qqwe_tag FilesService analyze: done, ops={}, resultLen={}", opLog.size, finalAnswer.length)
+        return FilesResponse(result = finalAnswer, operationLog = opLog, model = model)
     }
 
-    // ── Сценарий 2: Генерация README / ADR ──────────────────────────────────
+    // ── Tool execution ───────────────────────────────────────────────────────
 
-    private fun handleGenerate(task: String, model: String, opLog: MutableList<String>): String {
-        val outputPath = detectOutputPath(task)
-        opLog.add("📄 Целевой файл: $outputPath")
-
-        val keyFiles = collectKeyFiles()
-        opLog.add("📂 Прочитано: ${keyFiles.size} ключевых файлов")
-
-        val filesSummary = keyFiles.joinToString("\n\n") { (path, content) ->
-            "### $path\n${content.take(MAX_FILE_CHARS)}"
-        }.take(6000)
-
-        val prompt = buildString {
-            appendLine("Задача: $task")
-            appendLine()
-            appendLine("Ключевые файлы проекта:")
-            appendLine(filesSummary)
-            appendLine()
-            appendLine("Сгенерируй файл \"$outputPath\" на основе реального кода.")
-            appendLine("Отвечай только содержимым файла, без лишних пояснений.")
+    private fun executeTool(name: String, args: JsonNode): String = when (name) {
+        "list_files" -> {
+            val pattern = args.get("pattern")?.asText() ?: "**/*.kt"
+            listFiles(pattern)
         }
-
-        val generated = ollamaClient.chat(model, listOf(
-            mapOf("role" to "system", "content" to FILE_SYSTEM_PROMPT),
-            mapOf("role" to "user", "content" to prompt)
-        ))
-
-        val outFile = root.resolve(outputPath)
-        outFile.parentFile?.mkdirs()
-        outFile.writeText(generated, Charsets.UTF_8)
-        opLog.add("✅ Создано: $outputPath (${generated.length} символов)")
-
-        return generated
-    }
-
-    // ── Общий сценарий ───────────────────────────────────────────────────────
-
-    private fun handleGeneral(task: String, model: String, opLog: MutableList<String>): String {
-        val gitStatus = runGit("status", "--short")
-        opLog.add("📋 git status получен")
-        val prompt = buildString {
-            appendLine("Задача по проекту: $task")
-            appendLine()
-            appendLine("Git status:")
-            appendLine(gitStatus.take(1000))
-            appendLine()
-            appendLine("Ответь на русском языке.")
+        "read_file" -> {
+            val path = args.get("path")?.asText() ?: return "Error: missing path"
+            val maxLines = args.get("max_lines")?.asInt() ?: 150
+            readFile(path, maxLines)
         }
-        return ollamaClient.chat(model, listOf(
-            mapOf("role" to "system", "content" to FILE_SYSTEM_PROMPT),
-            mapOf("role" to "user", "content" to prompt)
-        ))
+        "search_in_files" -> {
+            val query = args.get("query")?.asText() ?: return "Error: missing query"
+            val exts = args.get("extensions")?.let { node ->
+                if (node.isArray) node.map { it.asText().trimStart('.') }.toSet()
+                else SOURCE_EXTENSIONS
+            } ?: SOURCE_EXTENSIONS
+            searchInFiles(query, exts)
+        }
+        "write_file" -> {
+            val path = args.get("path")?.asText() ?: return "Error: missing path"
+            val content = args.get("content")?.asText() ?: return "Error: missing content"
+            writeFile(path, content)
+        }
+        else -> "Unknown tool: $name"
     }
 
-    // ── Вспомогательные методы ───────────────────────────────────────────────
+    // ── File operations ──────────────────────────────────────────────────────
 
-    private fun isSearchIntent(task: String): Boolean {
-        val t = task.lowercase()
-        return listOf("найди", "поищи", "где используется", "usages", "usage", "найти", "поиск", "where is").any { it in t }
+    private fun listFiles(pattern: String): String {
+        val files = mutableListOf<String>()
+        try {
+            root.walkTopDown()
+                .onEnter { dir -> dir.name !in EXCLUDED_DIRS }
+                .filter { it.isFile }
+                .forEach { file ->
+                    val rel = file.relativeTo(root).path.replace('\\', '/')
+                    if (matchesGlob(rel, pattern)) files.add(rel)
+                }
+        } catch (e: Exception) {
+            return "Error listing files: ${e.message}"
+        }
+        files.sort()
+        return if (files.isEmpty()) "No files found for pattern: $pattern"
+        else "Files (${files.size}):\n${files.take(60).joinToString("\n")}"
     }
 
-    private fun isGenerateIntent(task: String): Boolean {
-        val t = task.lowercase()
-        return listOf("сгенерируй", "создай", "генерация", "generate", "readme", "adr", "changelog", "обнови документацию").any { it in t }
-    }
-
-    private fun extractSearchQuery(task: String): String {
-        val stopWords = setOf(
-            "найди", "поищи", "где", "используется", "все", "места", "использования",
-            "usages", "usage", "найти", "поиск", "всех", "файлах", "проекте", "where", "is", "find", "all"
-        )
-        return task.split(Regex("\\s+"))
-            .filter { it.isNotBlank() && it.lowercase() !in stopWords }
-            .joinToString(" ")
-            .trim()
-            .ifBlank { task }
-    }
-
-    private fun detectOutputPath(task: String): String {
-        val lower = task.lowercase()
-        return when {
-            "adr" in lower -> "docs/adr/adr-${System.currentTimeMillis() / 1000}.md"
-            "changelog" in lower -> "CHANGELOG.md"
-            else -> "README.md"
+    private fun readFile(relPath: String, maxLines: Int): String {
+        val target = root.resolve(relPath).normalize()
+        if (!target.canonicalPath.startsWith(root.canonicalPath)) return "Access denied"
+        if (!target.exists()) return "File not found: $relPath"
+        return try {
+            val lines = target.readLines(Charsets.UTF_8)
+            val result = lines.take(maxLines).joinToString("\n")
+            if (lines.size > maxLines) "$result\n... [truncated ${lines.size - maxLines} lines]"
+            else result
+        } catch (e: Exception) {
+            "Error reading $relPath: ${e.message}"
         }
     }
 
-    data class SearchMatch(val file: String, val line: Int, val text: String)
-
-    private fun searchInFiles(query: String): List<SearchMatch> {
-        val results = mutableListOf<SearchMatch>()
+    private fun searchInFiles(query: String, extensions: Set<String>): String {
+        val matches = mutableListOf<String>()
         root.walkTopDown()
             .onEnter { dir -> dir.name !in EXCLUDED_DIRS }
-            .filter { it.isFile && it.extension in SOURCE_EXTENSIONS.map { e -> e.trimStart('.') } }
+            .filter { it.isFile && it.extension in extensions }
             .forEach { file ->
-                if (results.size >= MAX_SEARCH_MATCHES) return@forEach
+                if (matches.size >= MAX_SEARCH_MATCHES) return@forEach
                 try {
                     file.readLines(Charsets.UTF_8).forEachIndexed { idx, line ->
-                        if (results.size < MAX_SEARCH_MATCHES && query.lowercase() in line.lowercase()) {
+                        if (matches.size < MAX_SEARCH_MATCHES && query.lowercase() in line.lowercase()) {
                             val rel = file.relativeTo(root).path.replace('\\', '/')
-                            results.add(SearchMatch(rel, idx + 1, line.trim()))
+                            matches.add("$rel:${idx + 1}: ${line.trim()}")
                         }
                     }
                 } catch (_: Exception) {}
             }
-        return results
+        return if (matches.isEmpty()) "No matches for '$query'"
+        else "Found ${matches.size} match(es) for '$query':\n${matches.joinToString("\n")}"
     }
 
-    private fun collectKeyFiles(): List<Pair<String, String>> {
-        val priority = listOf(
-            "README.md", "CLAUDE.md",
-            "app/src/main/java/com/danichapps/simpleagent/di/AppModule.kt",
-            "app/src/main/java/com/danichapps/simpleagent/domain/usecase/CommandRouterUseCase.kt",
-            "rag-server/src/main/kotlin/com/danichapps/ragserver/RagServerApplication.kt",
-            "tools/project_mcp_server.py"
-        )
-        val result = mutableListOf<Pair<String, String>>()
-        priority.forEach { rel ->
-            val f = root.resolve(rel)
-            if (f.exists() && f.isFile) {
-                try {
-                    result.add(rel to f.readText(Charsets.UTF_8))
-                } catch (_: Exception) {}
-            }
+    private fun writeFile(relPath: String, content: String): String {
+        val target = root.resolve(relPath).normalize()
+        if (!target.canonicalPath.startsWith(root.canonicalPath)) return "Access denied"
+        return try {
+            target.parentFile?.mkdirs()
+            target.writeText(content, Charsets.UTF_8)
+            "Written: $relPath (${content.length} chars)"
+        } catch (e: Exception) {
+            "Error writing $relPath: ${e.message}"
         }
-        // добавляем Controller-файлы для контекста
-        root.walkTopDown()
-            .onEnter { dir -> dir.name !in EXCLUDED_DIRS }
-            .filter { it.isFile && it.name.endsWith("Controller.kt") }
-            .take(6)
-            .forEach { f ->
-                val rel = f.relativeTo(root).path.replace('\\', '/')
-                if (result.none { it.first == rel }) {
-                    try { result.add(rel to f.readText(Charsets.UTF_8)) } catch (_: Exception) {}
-                }
-            }
-        return result
     }
 
-    private fun runGit(vararg args: String): String = try {
-        val proc = ProcessBuilder("git", *args)
-            .directory(root)
-            .redirectErrorStream(true)
-            .start()
-        proc.inputStream.bufferedReader(Charsets.UTF_8).readText().trim()
-    } catch (e: Exception) {
-        "git error: ${e.message}"
+    // ── Tools definition ─────────────────────────────────────────────────────
+
+    private fun buildToolsDefinition(): List<Map<String, Any>> = listOf(
+        mapOf(
+            "type" to "function",
+            "function" to mapOf(
+                "name" to "list_files",
+                "description" to "List project files matching a glob pattern. Use to discover what files exist before reading them.",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "pattern" to mapOf("type" to "string", "description" to "Glob pattern, e.g. **/*.kt, app/**/*.kt, rag-server/**/*.kt")
+                    ),
+                    "required" to listOf("pattern")
+                )
+            )
+        ),
+        mapOf(
+            "type" to "function",
+            "function" to mapOf(
+                "name" to "read_file",
+                "description" to "Read content of a specific project file by relative path.",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "path" to mapOf("type" to "string", "description" to "Relative file path, e.g. app/src/main/java/com/danichapps/simpleagent/di/AppModule.kt"),
+                        "max_lines" to mapOf("type" to "integer", "description" to "Max lines to return (default 150)")
+                    ),
+                    "required" to listOf("path")
+                )
+            )
+        ),
+        mapOf(
+            "type" to "function",
+            "function" to mapOf(
+                "name" to "search_in_files",
+                "description" to "Search for a text query across all project files. Returns file:line:text matches.",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "query" to mapOf("type" to "string", "description" to "Text to search (case-insensitive)"),
+                        "extensions" to mapOf(
+                            "type" to "array",
+                            "items" to mapOf("type" to "string"),
+                            "description" to "File extensions to search, e.g. [\"kt\", \"py\"]. Default: all source files"
+                        )
+                    ),
+                    "required" to listOf("query")
+                )
+            )
+        ),
+        mapOf(
+            "type" to "function",
+            "function" to mapOf(
+                "name" to "write_file",
+                "description" to "Create or overwrite a file in the project. Use to save generated documentation, reports, or new files.",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "path" to mapOf("type" to "string", "description" to "Relative file path to write"),
+                        "content" to mapOf("type" to "string", "description" to "Full file content")
+                    ),
+                    "required" to listOf("path", "content")
+                )
+            )
+        )
+    )
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private fun matchesGlob(path: String, pattern: String): Boolean = try {
+        val normalizedPath = path.replace('\\', '/')
+        val normalizedPattern = pattern.replace('\\', '/')
+        val matcher = FileSystems.getDefault().getPathMatcher("glob:$normalizedPattern")
+        matcher.matches(Paths.get(normalizedPath))
+    } catch (_: Exception) {
+        // fallback: simple contains check if pattern is not a valid glob
+        path.contains(pattern.trimStart('*', '/'))
     }
+
+    private fun summarizeArgs(args: JsonNode): String =
+        args.fields().asSequence().take(2).joinToString(", ") { "${it.key}=${it.value.asText().take(30)}" }
 
     companion object {
-        private val FILE_SYSTEM_PROMPT = """
-            Ты — AI-ассистент для работы с кодовой базой Android-проекта SimpleAgent.
-            Анализируй код вдумчиво, отвечай на русском языке.
-            При поиске usages — указывай файл, строку и назначение.
-            При генерации документации — следуй реальной структуре кода.
+        private val AGENT_SYSTEM_PROMPT = """
+            You are a file assistant for the SimpleAgent Android project (Kotlin, Android + Spring Boot).
+            Project root contains: app/ (Android), rag-server/ (Spring Boot backend), tools/ (MCP server).
+
+            You have tools:
+            - list_files(pattern): discover files, e.g. pattern="app/**/*.kt" or "rag-server/**/*.kt"
+            - read_file(path): read a file using FULL relative path like "app/src/main/java/com/danichapps/simpleagent/di/AppModule.kt"
+            - search_in_files(query): grep across project files
+            - write_file(path, content): create or update a file
+
+            IMPORTANT rules:
+            1. Always use tools FIRST — never answer from memory alone.
+            2. Use list_files to discover, then read_file with the FULL path exactly as returned by list_files.
+            3. NEVER truncate or shorten file paths — use them verbatim.
+            4. For architecture checks: search imports, then read suspicious files.
+            5. For docs generation: read key files, then write_file to save result.
+            6. Answer in Russian. Reference exact file:line in your findings.
         """.trimIndent()
     }
 }

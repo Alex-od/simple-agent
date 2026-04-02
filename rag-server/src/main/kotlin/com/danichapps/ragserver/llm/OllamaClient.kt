@@ -1,6 +1,8 @@
 package com.danichapps.ragserver.llm
 
 import com.danichapps.ragserver.llm.dto.LlmModelInfo
+import com.danichapps.ragserver.llm.dto.ToolCallResponse
+import com.danichapps.ragserver.llm.dto.ToolCallResult
 import com.fasterxml.jackson.databind.JsonNode
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -31,6 +33,50 @@ class OllamaClient(
             .block()
         return response?.get("message")?.get("content")?.asText()
             ?: throw IllegalStateException("Пустой ответ от Ollama")
+    }
+
+    fun chatWithTools(
+        model: String,
+        messages: List<Map<String, Any>>,
+        tools: List<Map<String, Any>>
+    ): ToolCallResponse {
+        val requestBody = mapOf(
+            "model" to model,
+            "messages" to messages,
+            "tools" to tools,
+            "stream" to false
+        )
+        val response = webClient.post()
+            .uri("/api/chat")
+            .header("Content-Type", "application/json")
+            .bodyValue(requestBody)
+            .retrieve()
+            .bodyToMono(JsonNode::class.java)
+            .block()
+            ?: throw IllegalStateException("Пустой ответ от Ollama (tools)")
+
+        val message = response.get("message")
+            ?: throw IllegalStateException("Нет поля message в ответе Ollama")
+
+        val content = message.get("content")?.asText().orEmpty()
+        val toolCallsNode = message.get("tool_calls")
+
+        val toolCalls = if (toolCallsNode != null && toolCallsNode.isArray && toolCallsNode.size() > 0) {
+            toolCallsNode.map { tc ->
+                val fn = tc.get("function")
+                ToolCallResult(
+                    name = fn?.get("name")?.asText() ?: "",
+                    arguments = fn?.get("arguments") ?: tc
+                )
+            }
+        } else emptyList()
+
+        log.debug(
+            "qqwe_tag OllamaClient, chatWithTools: content='{}', toolCalls={}",
+            content.take(80), toolCalls.map { it.name }
+        )
+
+        return ToolCallResponse(content = content, toolCalls = toolCalls)
     }
 
     fun listModels(): List<LlmModelInfo> {
