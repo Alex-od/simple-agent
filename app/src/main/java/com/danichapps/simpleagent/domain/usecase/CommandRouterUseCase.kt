@@ -1,8 +1,10 @@
 package com.danichapps.simpleagent.domain.usecase
 
 import android.util.Log
+import com.danichapps.simpleagent.data.remote.FilesService
 import com.danichapps.simpleagent.data.remote.ReviewService
 import com.danichapps.simpleagent.data.remote.SupportService
+import com.danichapps.simpleagent.data.remote.dto.FilesResponseDto
 import com.danichapps.simpleagent.data.remote.dto.ReviewResponseDto
 import com.danichapps.simpleagent.data.remote.dto.SupportResponseDto
 import com.danichapps.simpleagent.data.remote.dto.TicketSummaryDto
@@ -13,12 +15,14 @@ import com.danichapps.simpleagent.domain.model.TaskState
 private const val HELP_COMMAND_PREFIX = "/help"
 private const val REVIEW_COMMAND_PREFIX = "/review"
 private const val SUPPORT_COMMAND_PREFIX = "/support"
+private const val FILES_COMMAND_PREFIX = "/files"
 
 class CommandRouterUseCase(
     private val buildHelpContextUseCase: BuildHelpContextUseCase,
     private val buildHelpPromptUseCase: BuildHelpPromptUseCase,
     private val reviewService: ReviewService,
-    private val supportService: SupportService
+    private val supportService: SupportService,
+    private val filesService: FilesService
 ) {
 
     suspend fun execute(
@@ -62,12 +66,39 @@ class CommandRouterUseCase(
                 }
             }
 
+            rawInput.startsWith(FILES_COMMAND_PREFIX) -> {
+                val task = rawInput.removePrefix(FILES_COMMAND_PREFIX).trim()
+                Log.d("qqwe_tag CommandRouter, execute, task: ", task)
+                if (task.isBlank()) {
+                    RoutedChatCommand.DirectResponse(
+                        content = "Укажи задачу. Примеры:\n" +
+                            "• `/files найди все использования SupportService`\n" +
+                            "• `/files сгенерируй README по текущему коду`\n" +
+                            "• `/files найди где используется CommandRouterUseCase`"
+                    )
+                } else {
+                    val response = filesService.analyze(task)
+                    RoutedChatCommand.DirectResponse(content = formatFilesResponse(response))
+                }
+            }
+
             else -> RoutedChatCommand.Default(
                 messages = historyWithUser,
                 ragEnabled = ragEnabled,
                 taskState = taskState
             )
         }
+    }
+
+    private fun formatFilesResponse(r: FilesResponseDto): String = buildString {
+        appendLine("## Файловый ассистент")
+        appendLine("**Модель:** ${r.model}")
+        if (r.operationLog.isNotEmpty()) {
+            appendLine()
+            r.operationLog.forEach { appendLine(it) }
+        }
+        appendLine()
+        appendLine(r.result)
     }
 
     private fun formatSupportResponse(r: SupportResponseDto): String = buildString {

@@ -110,6 +110,97 @@ def handle_tool_call(name: str, arguments: dict) -> dict:
         summary = [{"id": t["id"], "subject": t["subject"], "status": t["status"], "userName": t["userName"]} for t in tickets]
         return make_text_result(text, {"tickets": summary})
 
+    if name == "read_file":
+        rel_path = arguments.get("path", "").strip()
+        target = (PROJECT_ROOT / rel_path).resolve()
+        if not str(target).startswith(str(PROJECT_ROOT)):
+            return make_text_result("Access denied: path outside project root.", {"error": "outside_root"})
+        if not target.exists() or not target.is_file():
+            return make_text_result(f"File not found: {rel_path}", {"error": "not_found"})
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace")
+            lines = content.splitlines()
+            max_lines = int(arguments.get("max_lines", 300))
+            truncated = len(lines) > max_lines
+            result_lines = lines[:max_lines]
+            text = "\n".join(result_lines)
+            if truncated:
+                text += f"\n... [truncated, showing {max_lines}/{len(lines)} lines]"
+            return make_text_result(text, {"path": rel_path, "lines": len(lines), "truncated": truncated})
+        except Exception as exc:
+            return make_text_result(f"Error reading file: {exc}", {"error": str(exc)})
+
+    if name == "search_in_files":
+        query = arguments.get("query", "").strip()
+        extensions = arguments.get("extensions", [".kt", ".py", ".java", ".xml", ".md", ".json"])
+        if isinstance(extensions, str):
+            extensions = [e.strip() for e in extensions.split(",")]
+        max_results = int(arguments.get("max_results", 50))
+        exclude_dirs = {".git", "build", ".gradle", ".kotlin", "__pycache__", "node_modules"}
+        matches = []
+        try:
+            for path in PROJECT_ROOT.rglob("*"):
+                if any(part in exclude_dirs for part in path.parts):
+                    continue
+                if not path.is_file():
+                    continue
+                if extensions and path.suffix not in extensions:
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                    for i, line in enumerate(text.splitlines(), 1):
+                        if query.lower() in line.lower():
+                            rel = str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+                            matches.append({"file": rel, "line": i, "text": line.strip()})
+                            if len(matches) >= max_results:
+                                break
+                except Exception:
+                    pass
+                if len(matches) >= max_results:
+                    break
+        except Exception as exc:
+            return make_text_result(f"Search error: {exc}", {"error": str(exc)})
+        if not matches:
+            return make_text_result(f"No matches for '{query}'.", {"matches": [], "total": 0})
+        lines_out = [f"{m['file']}:{m['line']}: {m['text']}" for m in matches]
+        summary = f"Found {len(matches)} match(es) for '{query}':\n" + "\n".join(lines_out)
+        return make_text_result(summary, {"matches": matches, "total": len(matches)})
+
+    if name == "write_file":
+        rel_path = arguments.get("path", "").strip()
+        content = arguments.get("content", "")
+        target = (PROJECT_ROOT / rel_path).resolve()
+        if not str(target).startswith(str(PROJECT_ROOT)):
+            return make_text_result("Access denied: path outside project root.", {"error": "outside_root"})
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            existed = target.exists()
+            target.write_text(content, encoding="utf-8")
+            action = "updated" if existed else "created"
+            return make_text_result(
+                f"File {action}: {rel_path} ({len(content)} chars)",
+                {"path": rel_path, "action": action, "size": len(content)}
+            )
+        except Exception as exc:
+            return make_text_result(f"Error writing file: {exc}", {"error": str(exc)})
+
+    if name == "list_files":
+        pattern = arguments.get("pattern", "**/*.kt")
+        exclude_dirs = {".git", "build", ".gradle", ".kotlin", "__pycache__"}
+        try:
+            files = []
+            for path in PROJECT_ROOT.glob(pattern):
+                if any(part in exclude_dirs for part in path.parts):
+                    continue
+                if path.is_file():
+                    rel = str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+                    files.append(rel)
+            files.sort()
+            text = f"Files matching '{pattern}' ({len(files)}):\n" + "\n".join(files[:100])
+            return make_text_result(text, {"files": files[:100], "total": len(files)})
+        except Exception as exc:
+            return make_text_result(f"Error listing files: {exc}", {"error": str(exc)})
+
     if name == "git_branch":
         ok, output = run_git("branch", "--show-current")
         branch = output if ok and output else "unknown"
@@ -159,6 +250,61 @@ def tools_definition() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {},
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "read_file",
+            "description": "Read a file from the project by relative path.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path from project root, e.g. app/src/main/.../Foo.kt"},
+                    "max_lines": {"type": "integer", "description": "Max lines to return (default 300)", "default": 300}
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "search_in_files",
+            "description": "Search for a text query across project files. Returns file:line:text matches.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Text to search for (case-insensitive)"},
+                    "extensions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "File extensions to include, e.g. [\".kt\", \".py\"]. Default: .kt .py .java .xml .md .json"
+                    },
+                    "max_results": {"type": "integer", "description": "Max matches to return (default 50)", "default": 50}
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "write_file",
+            "description": "Create or overwrite a file in the project with given content.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path from project root"},
+                    "content": {"type": "string", "description": "File content to write"}
+                },
+                "required": ["path", "content"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "list_files",
+            "description": "List project files matching a glob pattern.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern, e.g. **/*.kt or rag_files/**/*.md", "default": "**/*.kt"}
+                },
                 "additionalProperties": False,
             },
         },

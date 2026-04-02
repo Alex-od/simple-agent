@@ -1,11 +1,10 @@
 # SimpleAgent
-
 SimpleAgent is an Android developer assistant with a Compose client and a local RAG server.
 
 ## Modules
 
 - `app` - Android client built with Jetpack Compose, Koin, Coroutines, and Ktor.
-- `rag-server` - Spring Boot service for document indexing, semantic search, and project context APIs.
+- `rag-server` - Spring Boot service for document indexing, semantic search, и project context APIs.
 - `docs` - project documentation indexed by RAG for `/help`.
 - `rag_files` - extra local reference documents, including `.docx` files.
 - `tools` - local tooling, including the project MCP server.
